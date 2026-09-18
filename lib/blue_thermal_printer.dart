@@ -64,6 +64,11 @@ class BlueThermalPrinter {
   Future<bool?> get openSettings async =>
       await _channel.invokeMethod('openSettings');
 
+  ///isPermissionBluetoothGranted -- cek izin Bluetooth yang dibutuhkan tanpa
+  ///memicu dialog permintaan izin.
+  Future<bool?> get isPermissionBluetoothGranted async =>
+      await _channel.invokeMethod('isPermissionBluetoothGranted');
+
   ///getBondedDevices()
   Future<List<BluetoothDevice>> getBondedDevices() async {
     final List list = await (_channel.invokeMethod('getBondedDevices'));
