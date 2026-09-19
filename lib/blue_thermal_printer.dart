@@ -1,7 +1,10 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
+
+// Konstanta STATE_*/CONNECTED/DISCONNECTED sengaja SCREAMING_SNAKE_CASE, meniru penamaan
+// int constant Android BluetoothAdapter/ACL_* yang direpresentasikannya -- bukan diabaikan.
+// ignore_for_file: constant_identifier_names
 
 class BlueThermalPrinter {
   static const int STATE_OFF = 10;
@@ -18,27 +21,15 @@ class BlueThermalPrinter {
 
   static const String namespace = 'blue_thermal_printer';
 
-  static const MethodChannel _channel =
-      const MethodChannel('$namespace/methods');
+  static const MethodChannel _channel = MethodChannel('$namespace/methods');
 
-  static const EventChannel _readChannel =
-      const EventChannel('$namespace/read');
+  static const EventChannel _readChannel = EventChannel('$namespace/read');
 
-  static const EventChannel _stateChannel =
-      const EventChannel('$namespace/state');
+  static const EventChannel _stateChannel = EventChannel('$namespace/state');
 
-  final StreamController<MethodCall> _methodStreamController =
-      new StreamController.broadcast();
+  BlueThermalPrinter._();
 
-  //Stream<MethodCall> get _methodStream => _methodStreamController.stream;
-
-  BlueThermalPrinter._() {
-    _channel.setMethodCallHandler((MethodCall call) async {
-      _methodStreamController.add(call);
-    });
-  }
-
-  static BlueThermalPrinter _instance = new BlueThermalPrinter._();
+  static final BlueThermalPrinter _instance = BlueThermalPrinter._();
 
   static BlueThermalPrinter get instance => _instance;
 
@@ -71,7 +62,8 @@ class BlueThermalPrinter {
 
   ///getBondedDevices()
   Future<List<BluetoothDevice>> getBondedDevices() async {
-    final List list = await (_channel.invokeMethod('getBondedDevices'));
+    final List<dynamic> list =
+        await (_channel.invokeMethod('getBondedDevices'));
     return list.map((map) => BluetoothDevice.fromMap(map)).toList();
   }
 
@@ -80,22 +72,22 @@ class BlueThermalPrinter {
       _channel.invokeMethod('isDeviceConnected', device.toMap());
 
   ///connect(BluetoothDevice device)
-  Future<dynamic> connect(BluetoothDevice device) =>
+  Future<bool?> connect(BluetoothDevice device) =>
       _channel.invokeMethod('connect', device.toMap());
 
   ///disconnect()
-  Future<dynamic> disconnect() => _channel.invokeMethod('disconnect');
+  Future<bool?> disconnect() => _channel.invokeMethod('disconnect');
 
   ///write(String message)
-  Future<dynamic> write(String message) =>
+  Future<bool?> write(String message) =>
       _channel.invokeMethod('write', {'message': message});
 
   ///writeBytes(Uint8List message)
-  Future<dynamic> writeBytes(Uint8List message) =>
+  Future<bool?> writeBytes(Uint8List message) =>
       _channel.invokeMethod('writeBytes', {'message': message});
 
   ///printCustom(String message, int size, int align,{String? charset})
-  Future<dynamic> printCustom(String message, int size, int align,
+  Future<bool?> printCustom(String message, int size, int align,
           {String? charset}) =>
       _channel.invokeMethod('printCustom', {
         'message': message,
@@ -105,27 +97,27 @@ class BlueThermalPrinter {
       });
 
   ///printNewLine()
-  Future<dynamic> printNewLine() => _channel.invokeMethod('printNewLine');
+  Future<bool?> printNewLine() => _channel.invokeMethod('printNewLine');
 
   ///paperCut()
-  Future<dynamic> paperCut() => _channel.invokeMethod('paperCut');
+  Future<bool?> paperCut() => _channel.invokeMethod('paperCut');
 
   ///drawerPin5()
-  Future<dynamic> drawerPin2() => _channel.invokeMethod('drawerPin2');
+  Future<bool?> drawerPin2() => _channel.invokeMethod('drawerPin2');
 
   ///drawerPin5()
-  Future<dynamic> drawerPin5() => _channel.invokeMethod('drawerPin5');
+  Future<bool?> drawerPin5() => _channel.invokeMethod('drawerPin5');
 
   ///printImage(String pathImage)
-  Future<dynamic> printImage(String pathImage) =>
+  Future<bool?> printImage(String pathImage) =>
       _channel.invokeMethod('printImage', {'pathImage': pathImage});
 
   ///printImageBytes(Uint8List bytes)
-  Future<dynamic> printImageBytes(Uint8List bytes) =>
+  Future<bool?> printImageBytes(Uint8List bytes) =>
       _channel.invokeMethod('printImageBytes', {'bytes': bytes});
 
   ///printQRcode(String textToQR, int width, int height, int align)
-  Future<dynamic> printQRcode(
+  Future<bool?> printQRcode(
           String textToQR, int width, int height, int align) =>
       _channel.invokeMethod('printQRcode', {
         'textToQR': textToQR,
@@ -135,7 +127,7 @@ class BlueThermalPrinter {
       });
 
   ///printLeftRight(String string1, String string2, int size,{String? charset, String? format})
-  Future<dynamic> printLeftRight(String string1, String string2, int size,
+  Future<bool?> printLeftRight(String string1, String string2, int size,
           {String? charset, String? format}) =>
       _channel.invokeMethod('printLeftRight', {
         'string1': string1,
@@ -146,7 +138,7 @@ class BlueThermalPrinter {
       });
 
   ///print3Column(String string1, String string2, String string3, int size,{String? charset, String? format})
-  Future<dynamic> print3Column(
+  Future<bool?> print3Column(
           String string1, String string2, String string3, int size,
           {String? charset, String? format}) =>
       _channel.invokeMethod('print3Column', {
@@ -159,7 +151,7 @@ class BlueThermalPrinter {
       });
 
   ///print4Column(String string1, String string2, String string3,String string4, int size,{String? charset, String? format})
-  Future<dynamic> print4Column(String string1, String string2, String string3,
+  Future<bool?> print4Column(String string1, String string2, String string3,
           String string4, int size,
           {String? charset, String? format}) =>
       _channel.invokeMethod('print4Column', {
@@ -176,7 +168,6 @@ class BlueThermalPrinter {
 class BluetoothDevice {
   final String? name;
   final String? address;
-  final int type = 0;
   bool connected = false;
 
   BluetoothDevice(this.name, this.address);
@@ -186,15 +177,14 @@ class BluetoothDevice {
         address = map['address'];
 
   Map<String, dynamic> toMap() => {
-        'name': this.name,
-        'address': this.address,
-        'type': this.type,
-        'connected': this.connected,
+        'name': name,
+        'address': address,
+        'connected': connected,
       };
 
-  operator ==(Object other) {
-    return other is BluetoothDevice && other.address == this.address;
-  }
+  @override
+  bool operator ==(Object other) =>
+      other is BluetoothDevice && other.address == address;
 
   @override
   int get hashCode => address.hashCode;
