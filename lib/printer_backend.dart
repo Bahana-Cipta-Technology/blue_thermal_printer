@@ -9,7 +9,9 @@
 library;
 
 export 'src/printer_backend.dart';
+export 'src/printer_backend_escpos.dart';
 export 'src/printer_device.dart';
 export 'src/printer_status.dart';
 export 'src/receipt.dart';
+export 'src/receipt_renderer.dart';
 export 'src/result.dart';
