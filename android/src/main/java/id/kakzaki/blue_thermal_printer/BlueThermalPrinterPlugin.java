@@ -36,6 +36,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -70,6 +71,10 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
   // Batas waktu tunggu socket.connect() sebelum dianggap gagal -- cukup untuk radio BT merespons
   // tapi tidak bikin user menunggu terlalu lama kalau device tidak terjangkau.
   private static final int CONNECT_TIMEOUT_MILLIS = 12_000;
+  // Batas waktu tunggu satu byte respons query status real-time ESC/POS (DLE EOT n) --
+  // cukup untuk printer yang mendukungnya merespons, tapi tidak menahan pemanggil lama-lama
+  // kalau printer (mis. clone murah) sama sekali tidak mengimplementasikan query ini.
+  private static final long STATUS_QUERY_TIMEOUT_MILLIS = 1_500;
   private static ConnectedThread connectedThread = null;
   private BluetoothAdapter mBluetoothAdapter;
 
@@ -301,6 +306,15 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
           writeBytes(result, message);
         } else {
           result.error("invalid_argument", "argument 'message' not found", null);
+        }
+        break;
+
+      case "queryPrinterStatus":
+        if (arguments.containsKey("type")) {
+          int statusType = (int) arguments.get("type");
+          queryPrinterStatus(result, statusType);
+        } else {
+          result.error("invalid_argument", "argument 'type' not found", null);
         }
         break;
 
@@ -731,6 +745,57 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
     }
   }
 
+  /**
+   * Kirim query status real-time ESC/POS (DLE EOT n, lihat {@link PrinterCommands}) dan
+   * tunggu satu byte respons lewat {@link ConnectedThread#awaitStatusResponse(long)}.
+   * {@code null} berarti printer tidak merespons dalam {@link #STATUS_QUERY_TIMEOUT_MILLIS}
+   * -- dianggap "tidak diketahui", bukan galat, karena tidak semua printer clone ESC/POS
+   * mengimplementasikan query ini.
+   */
+  private void queryPrinterStatus(Result result, int statusType) {
+    if (connectedThread == null) {
+      result.error("write_error", "not connected", null);
+      return;
+    }
+    byte[] command = statusQueryCommand(statusType);
+    if (command == null) {
+      result.error("invalid_argument", "unsupported status type: " + statusType, null);
+      return;
+    }
+    final ConnectedThread thread = connectedThread;
+    AsyncTask.execute(() -> {
+      thread.armStatusRequest();
+      if (!thread.write(command)) {
+        result.error("write_error", "failed to write status query to the printer socket", null);
+        return;
+      }
+      Integer response = thread.awaitStatusResponse(STATUS_QUERY_TIMEOUT_MILLIS);
+      if (response == null) {
+        Log.w(TAG, "queryPrinterStatus(type=" + statusType + "): no response within "
+            + STATUS_QUERY_TIMEOUT_MILLIS + "ms -- printer may not support DLE EOT status queries");
+      } else {
+        Log.i(TAG, "queryPrinterStatus(type=" + statusType + "): response byte = 0x"
+            + Integer.toHexString(response));
+      }
+      result.success(response);
+    });
+  }
+
+  private byte[] statusQueryCommand(int statusType) {
+    switch (statusType) {
+      case 1:
+        return PrinterCommands.TRANSMIT_DLE_PRINTER_STATUS;
+      case 2:
+        return PrinterCommands.TRANSMIT_DLE_OFFLINE_PRINTER_STATUS;
+      case 3:
+        return PrinterCommands.TRANSMIT_DLE_ERROR_STATUS;
+      case 4:
+        return PrinterCommands.TRANSMIT_DLE_ROLL_PAPER_SENSOR_STATUS;
+      default:
+        return null;
+    }
+  }
+
   private void printCustom(Result result, String message, int size, int align, String charset) {
     if (connectedThread == null) {
       result.error("write_error", "not connected", null);
@@ -982,6 +1047,13 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
     private final InputStream inputStream;
     private final OutputStream outputStream;
 
+    // Mailbox satu slot dipakai queryPrinterStatus() untuk menangkap byte respons DLE EOT
+    // tanpa membuka thread pembaca kedua di atas InputStream yang sama -- run() di bawah ini
+    // tetap satu-satunya pembaca socket, ia cuma dialihkan sementara ke mailbox alih-alih
+    // readSink saat sebuah query sedang ditunggu.
+    private final ArrayBlockingQueue<Byte> statusResponseMailbox = new ArrayBlockingQueue<>(1);
+    private volatile boolean awaitingStatusResponse = false;
+
     ConnectedThread(BluetoothSocket socket) {
       mmSocket = socket;
       InputStream tmpIn = null;
@@ -1003,6 +1075,14 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
       while (true) {
         try {
           bytes = inputStream.read(buffer);
+          if (awaitingStatusResponse && bytes > 0) {
+            awaitingStatusResponse = false;
+            statusResponseMailbox.offer(buffer[0]);
+            if (bytes > 1) {
+              readSink.success(new String(buffer, 1, bytes - 1));
+            }
+            continue;
+          }
           readSink.success(new String(buffer, 0, bytes));
         } catch (NullPointerException e) {
           break;
@@ -1012,7 +1092,31 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
       }
     }
 
-    public boolean write(byte[] bytes) {
+    /** Bersihkan mailbox lalu tandai byte berikutnya yang datang sebagai respons status query. */
+    void armStatusRequest() {
+      statusResponseMailbox.clear();
+      awaitingStatusResponse = true;
+    }
+
+    /**
+     * Tunggu byte respons query status hingga {@code timeoutMillis}, dikembalikan sebagai
+     * {@code int} tak-bertanda (0-255). {@code null} kalau timeout atau terinterupsi. Selalu
+     * mematikan {@link #awaitingStatusResponse} di akhir supaya {@link #run()} kembali
+     * meneruskan byte apa pun ke {@code readSink} seperti biasa.
+     */
+    Integer awaitStatusResponse(long timeoutMillis) {
+      try {
+        Byte response = statusResponseMailbox.poll(timeoutMillis, TimeUnit.MILLISECONDS);
+        return response == null ? null : (response & 0xFF);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return null;
+      } finally {
+        awaitingStatusResponse = false;
+      }
+    }
+
+    public synchronized boolean write(byte[] bytes) {
       try {
         outputStream.write(bytes);
         return true;

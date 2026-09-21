@@ -19,6 +19,12 @@ class BlueThermalPrinter {
   static const int DISCONNECTED = 0;
   static const int DISCONNECT_REQUESTED = 2;
 
+  /// Tipe query status real-time ESC/POS (DLE EOT n) -- lihat [queryPrinterStatus].
+  static const int statusTypePrinter = 1;
+  static const int statusTypeOffline = 2;
+  static const int statusTypeError = 3;
+  static const int statusTypeRollPaperSensor = 4;
+
   static const String namespace = 'blue_thermal_printer';
 
   static const MethodChannel _channel = MethodChannel('$namespace/methods');
@@ -85,6 +91,13 @@ class BlueThermalPrinter {
   ///writeBytes(Uint8List message)
   Future<bool?> writeBytes(Uint8List message) =>
       _channel.invokeMethod('writeBytes', {'message': message});
+
+  ///queryPrinterStatus(int statusType) -- ESC/POS DLE EOT n (lihat konstanta
+  ///statusType* di atas). Kembalikan byte respons mentah (0-255), atau null
+  ///bila printer tidak merespons dalam batas waktu -- bukan galat, sejumlah
+  ///printer clone tidak mengimplementasikan query ini.
+  Future<int?> queryPrinterStatus(int statusType) =>
+      _channel.invokeMethod('queryPrinterStatus', {'type': statusType});
 
   ///printCustom(String message, int size, int align,{String? charset})
   Future<bool?> printCustom(String message, int size, int align,

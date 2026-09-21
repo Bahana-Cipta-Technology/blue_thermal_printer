@@ -19,6 +19,8 @@ void main() {
           return [
             {'name': 'Printer A', 'address': '00:11:22:33:44:55'},
           ];
+        case 'queryPrinterStatus':
+          return 0x00;
         default:
           return null;
       }
@@ -45,5 +47,21 @@ void main() {
     expect(devices, hasLength(1));
     expect(devices.first.name, 'Printer A');
     expect(devices.first.address, '00:11:22:33:44:55');
+  });
+
+  test('queryPrinterStatus invokes the channel with the status type', () async {
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      calls.add(methodCall);
+      return 0x00;
+    });
+
+    final status = await BlueThermalPrinter.instance
+        .queryPrinterStatus(BlueThermalPrinter.statusTypeOffline);
+
+    expect(status, 0x00);
+    expect(calls.single.method, 'queryPrinterStatus');
+    expect(calls.single.arguments, {'type': BlueThermalPrinter.statusTypeOffline});
   });
 }
