@@ -1,5 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
   package="id.kakzaki.blue_thermal_printer">
+    <!-- Visibility paket Android 11+ supaya bindService ke servis printer
+         bawaan Sunmi (vendor/sunmi/) berhasil menemukan servisnya, tanpa
+         perlu tiap app konsumen menambahkan ini sendiri. -->
+    <queries>
+      <package android:name="woyou.aidlservice.jiuiv5" />
+    </queries>
+
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <!-- Request legacy Bluetooth permissions on older devices. -->
     <uses-permission android:name="android.permission.BLUETOOTH"

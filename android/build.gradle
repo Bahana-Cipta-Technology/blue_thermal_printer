@@ -35,6 +35,11 @@ android {
     lintOptions {
         disable 'InvalidPackage'
     }
+    buildFeatures {
+        // Dibutuhkan untuk mengompilasi AIDL vendor Sunmi di
+        // src/main/aidl/woyou/aidlservice/jiuiv5/.
+        aidl true
+    }
 }
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.8.0'

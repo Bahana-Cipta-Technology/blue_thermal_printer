@@ -62,6 +62,8 @@ import com.google.zxing.MultiFormatWriter;
 import com.google.zxing.common.BitMatrix;
 import com.journeyapps.barcodescanner.BarcodeEncoder;
 
+import id.kakzaki.blue_thermal_printer.vendor.sunmi.SunmiPrinterChannel;
+
 public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, MethodCallHandler, RequestPermissionsResultListener {
 
   private static final String TAG = "BThermalPrinterPlugin";
@@ -94,17 +96,27 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
 
   private Activity activity;
 
+  // Vendor Sunmi (printer bawaan, lewat AIDL) -- terisolasi di package
+  // `vendor.sunmi`, channel method sendiri ("blue_thermal_printer/sunmi"),
+  // sama sekali tidak menyentuh switch/logic ESC/POS di atas. Tidak butuh
+  // Activity (bind AIDL cukup lewat Application context), jadi disiapkan di
+  // sini, bukan di setup()/detach() yang terikat siklus hidup Activity.
+  private SunmiPrinterChannel sunmiPrinterChannel;
+
   public BlueThermalPrinterPlugin() {
   }
 
   @Override
   public void onAttachedToEngine(@NonNull FlutterPluginBinding binding) {
     pluginBinding = binding;
+    sunmiPrinterChannel = new SunmiPrinterChannel(binding.getApplicationContext(), binding.getBinaryMessenger());
   }
 
   @Override
   public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
     pluginBinding = null;
+    sunmiPrinterChannel.dispose();
+    sunmiPrinterChannel = null;
   }
 
   @Override

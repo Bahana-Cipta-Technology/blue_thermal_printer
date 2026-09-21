@@ -10,6 +10,7 @@ library;
 
 export 'src/printer_backend.dart';
 export 'src/printer_backend_escpos.dart';
+export 'src/printer_backend_sunmi.dart';
 export 'src/printer_device.dart';
 export 'src/printer_status.dart';
 export 'src/receipt.dart';
