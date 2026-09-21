@@ -9,7 +9,11 @@ import 'receipt.dart';
 import 'receipt_renderer.dart';
 import 'result.dart';
 
-const _syntheticDevice = PrinterDevice(
+/// Satu-satunya "perangkat" yang pernah dikembalikan backend ini -- printer
+/// bawaan tidak punya konsep pemasangan, jadi ini cuma penanda identitas
+/// tetap. Publik supaya pemanggil (mis. probe deteksi hardware saat boot)
+/// bisa memakainya tanpa perlu tahu isinya.
+const kSunmiBuiltInDevice = PrinterDevice(
   name: 'Printer Bawaan',
   macAddress: 'sunmi-builtin',
 );
@@ -77,9 +81,15 @@ class PrinterBackendSunmi implements PrinterBackend {
     }
   }
 
+  /// Selalu mengembalikan satu-satunya slot printer bawaan, terlepas dari
+  /// [isAvailable] saat ini -- backend ini baru benar-benar "available"
+  /// SETELAH [connect] berhasil bind, jadi menggerbang di sini akan
+  /// mencegah pemanggil (mis. auto-connect) pernah mendapat perangkat untuk
+  /// dicoba sambungkan sama sekali.
   @override
-  Future<List<PrinterDevice>> discoverDevices() async =>
-      await isAvailable() ? const [_syntheticDevice] : const [];
+  Future<List<PrinterDevice>> discoverDevices() async => const [
+    kSunmiBuiltInDevice,
+  ];
 
   @override
   Future<PrinterResult<void>> connect(PrinterDevice device) async {

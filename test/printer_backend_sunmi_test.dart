@@ -19,7 +19,11 @@ void main() {
       final backend = PrinterBackendSunmi(updateState: () async => 505);
 
       expect(await backend.isAvailable(), isFalse);
-      expect(await backend.discoverDevices(), isEmpty);
+      // discoverDevices() TETAP mengembalikan slot sintetisnya walau belum
+      // available -- backend ini baru available SETELAH connect() berhasil
+      // bind, jadi menggerbang di sini akan membuat pemanggil (mis.
+      // auto-connect) tidak pernah punya perangkat untuk dicoba sambungkan.
+      expect(await backend.discoverDevices(), [device]);
     });
 
     test('tidak tersedia saat updateState melempar galat', () async {
