@@ -43,49 +43,128 @@ void main() {
       expect(writes, 2);
     });
 
-    test('penulisan sukses tapi printer melaporkan kertas habis tetap gagal', () async {
-      final backend = PrinterBackendEscpos(
-        connected: () async => true,
-        encode: (_) async => [1],
-        write: (_) async => true,
-        checkStatus: () async => const PrinterStatus(hasPaper: false),
-      );
+    test(
+      'penulisan sukses tapi printer melaporkan kertas habis pasca-tulis tetap gagal',
+      () async {
+        var call = 0;
+        final backend = PrinterBackendEscpos(
+          connected: () async => true,
+          encode: (_) async => [1],
+          write: (_) async => true,
+          // Pre-check (panggilan ke-1) bersih supaya benar-benar sampai
+          // menulis; baru pasca-tulis (panggilan ke-2) melaporkan masalah.
+          checkStatus: () async {
+            call++;
+            return call == 1
+                ? PrinterStatus.unknown
+                : const PrinterStatus(hasPaper: false);
+          },
+        );
 
-      final result = await backend.printReceipt(receipt);
+        final result = await backend.printReceipt(receipt);
 
-      expect(result.isErr, isTrue);
-    });
+        expect(result.isErr, isTrue);
+      },
+    );
 
     test('penulisan sukses dan status printer tidak diketahui tetap dianggap sukses', () async {
+      var writes = 0;
       final backend = PrinterBackendEscpos(
         connected: () async => true,
         encode: (_) async => [1],
-        write: (_) async => true,
+        write: (_) async {
+          writes++;
+          return true;
+        },
         checkStatus: () async => PrinterStatus.unknown,
       );
 
       final result = await backend.printReceipt(receipt);
 
       expect(result.isOk, isTrue);
+      expect(writes, 1);
     });
 
-    test('penulisan sukses tapi printer melaporkan cover terbuka atau galat tetap gagal', () async {
+    test('penulisan sukses tapi printer melaporkan cover terbuka atau galat pasca-tulis tetap gagal', () async {
+      var coverCall = 0;
       final coverOpen = PrinterBackendEscpos(
         connected: () async => true,
         encode: (_) async => [1],
         write: (_) async => true,
-        checkStatus: () async => const PrinterStatus(coverClosed: false),
+        checkStatus: () async {
+          coverCall++;
+          return coverCall == 1
+              ? PrinterStatus.unknown
+              : const PrinterStatus(coverClosed: false);
+        },
       );
+      var errorCall = 0;
       final error = PrinterBackendEscpos(
         connected: () async => true,
         encode: (_) async => [1],
         write: (_) async => true,
-        checkStatus: () async => const PrinterStatus(hasError: true),
+        checkStatus: () async {
+          errorCall++;
+          return errorCall == 1
+              ? PrinterStatus.unknown
+              : const PrinterStatus(hasError: true);
+        },
       );
 
       expect((await coverOpen.printReceipt(receipt)).isErr, isTrue);
       expect((await error.printReceipt(receipt)).isErr, isTrue);
     });
+
+    test(
+      'pre-check menolak sebelum satu byte pun ditulis saat status sudah bermasalah',
+      () async {
+        var writes = 0;
+        final backend = PrinterBackendEscpos(
+          connected: () async => true,
+          encode: (_) async => [1],
+          write: (_) async {
+            writes++;
+            return true;
+          },
+          checkStatus: () async => const PrinterStatus(hasPaper: false),
+        );
+
+        final result = await backend.printReceipt(receipt);
+
+        expect(result.isErr, isTrue);
+        expect(result.failureOrNull?.message, 'Kertas printer habis.');
+        expect(writes, 0);
+      },
+    );
+
+    test(
+      'kegagalan pasca-tulis memicu reset buffer (ESC @) tambahan',
+      () async {
+        final writes = <List<int>>[];
+        var call = 0;
+        final backend = PrinterBackendEscpos(
+          connected: () async => true,
+          encode: (_) async => [1, 2, 3],
+          write: (bytes) async {
+            writes.add(bytes);
+            return true;
+          },
+          checkStatus: () async {
+            call++;
+            return call == 1
+                ? PrinterStatus.unknown
+                : const PrinterStatus(hasPaper: false);
+          },
+        );
+
+        await backend.printReceipt(receipt);
+
+        expect(writes, [
+          [1, 2, 3], // data struk yang gagal tercetak
+          [27, 64], // ESC @ pembersih buffer
+        ]);
+      },
+    );
   });
 
   group('connect', () {

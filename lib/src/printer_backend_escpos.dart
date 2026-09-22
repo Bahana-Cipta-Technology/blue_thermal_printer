@@ -222,6 +222,16 @@ class PrinterBackendEscpos implements PrinterBackend {
           PrinterFailure('Printer belum terhubung. Buka Koneksi Printer.'),
         );
       }
+      // Cek status LEBIH DULU, sebelum satu byte pun terkirim -- untuk
+      // skenario paling umum (kertas sudah habis sebelum operator mencoba
+      // cetak), ini mencegah data ikut nyangkut di buffer printer sama
+      // sekali. Status `unknown` (banyak printer clone tidak mendukung
+      // `DLE EOT`) sengaja TIDAK memblokir -- `hasKnownProblem` sudah
+      // dirancang begitu.
+      final preStatus = await _checkStatus();
+      if (preStatus.hasKnownProblem) {
+        return PrinterErr(PrinterFailure(preStatus.problemMessage!));
+      }
       final bytes = await _encode(receipt);
       if (!await _write(bytes)) {
         return const PrinterErr(
@@ -236,15 +246,17 @@ class PrinterBackendEscpos implements PrinterBackend {
       // terkirim" tidak keliru dilaporkan sebagai "berhasil dicetak".
       final status = await _checkStatus();
       if (status.hasKnownProblem) {
-        return PrinterErr(
-          PrinterFailure(
-            status.hasPaper == false
-                ? 'Kertas printer habis.'
-                : status.coverClosed == false
-                ? 'Penutup printer terbuka.'
-                : 'Printer melaporkan galat.',
-          ),
-        );
+        // Bersihkan buffer printer dari data yang baru saja gagal tercetak
+        // sekarang juga -- best-effort, jangan sampai gagal di sini malah
+        // menutupi pesan galat yang sebenarnya. Kalau operator tidak pernah
+        // mencoba lagi, sisa data tidak menumpuk menunggu percobaan
+        // berikutnya yang mungkin tidak pernah terjadi.
+        try {
+          await _write(const [27, 64]); // ESC @ (Initialize Printer)
+        } catch (_) {
+          // Diabaikan -- ini cuma kebersihan, bukan penentu hasil.
+        }
+        return PrinterErr(PrinterFailure(status.problemMessage!));
       }
       return const PrinterOk(null);
     } catch (_) {

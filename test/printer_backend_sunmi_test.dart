@@ -156,16 +156,90 @@ void main() {
       expect(result.isOk, isTrue);
     });
 
-    test('pengiriman sukses tapi status melaporkan kertas habis tetap gagal', () async {
-      final backend = PrinterBackendSunmi(
-        updateState: () async => 3,
-        doPrintBitmap: (_) async => true,
-      );
+    test(
+      'pengiriman sukses tapi status melaporkan kertas habis pasca-cetak tetap gagal',
+      () async {
+        var call = 0;
+        final backend = PrinterBackendSunmi(
+          // Pre-check (panggilan ke-1) bersih supaya benar-benar sampai
+          // memanggil doPrintBitmap; baru pasca-cetak (panggilan ke-2)
+          // melaporkan masalah.
+          updateState: () async {
+            call++;
+            return call == 1 ? 1 : 3;
+          },
+          doPrintBitmap: (_) async => true,
+        );
 
-      final result = await backend.printReceipt(receipt);
+        final result = await backend.printReceipt(receipt);
 
-      expect(result.isErr, isTrue);
-    });
+        expect(result.isErr, isTrue);
+      },
+    );
+
+    test(
+      'pre-check menolak sebelum satu bitmap pun dikirim saat status sudah bermasalah',
+      () async {
+        var prints = 0;
+        final backend = PrinterBackendSunmi(
+          updateState: () async => 3,
+          doPrintBitmap: (_) async {
+            prints++;
+            return true;
+          },
+        );
+
+        final result = await backend.printReceipt(receipt);
+
+        expect(result.isErr, isTrue);
+        expect(result.failureOrNull?.message, 'Kertas printer habis.');
+        expect(prints, 0);
+      },
+    );
+
+    test(
+      'enterBuffer/exitBuffer dipanggil mengapit doPrintBitmap saat sukses',
+      () async {
+        final calls = <String>[];
+        final backend = PrinterBackendSunmi(
+          updateState: () async => 1,
+          doPrintBitmap: (_) async {
+            calls.add('print');
+            return true;
+          },
+          enterBuffer: (clean) async {
+            calls.add('enter($clean)');
+            return true;
+          },
+          exitBuffer: (commit) async {
+            calls.add('exit($commit)');
+            return true;
+          },
+        );
+
+        final result = await backend.printReceipt(receipt);
+
+        expect(result.isOk, isTrue);
+        expect(calls, ['enter(true)', 'print', 'exit(true)']);
+      },
+    );
+
+    test(
+      'enterBuffer/exitBuffer gagal tidak pernah menggagalkan cetakan yang '
+      'sebenarnya berhasil (API belum diverifikasi di semua vendor)',
+      () async {
+        final backend = PrinterBackendSunmi(
+          updateState: () async => 1,
+          doPrintBitmap: (_) async => true,
+          enterBuffer: (_) async => throw Exception('belum didukung vendor ini'),
+          exitBuffer: (_) async => throw Exception('belum didukung vendor ini'),
+        );
+
+        final result = await backend.printReceipt(receipt);
+
+        expect(result.isOk, isTrue);
+      },
+    );
 
     test('menolak cetak bersamaan dan dapat mencoba ulang setelah gagal', () async {
       final pending = Completer<bool>();

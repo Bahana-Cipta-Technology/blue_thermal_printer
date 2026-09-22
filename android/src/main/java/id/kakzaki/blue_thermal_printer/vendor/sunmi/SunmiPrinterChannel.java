@@ -57,6 +57,16 @@ public class SunmiPrinterChannel implements MethodCallHandler {
         bridge.printBitmap(bytes, success -> mainHandler.post(() -> result.success(success)));
         break;
 
+      case "enterBuffer":
+        Boolean clean = call.argument("clean");
+        result.success(bridge.enterPrinterBuffer(Boolean.TRUE.equals(clean)));
+        break;
+
+      case "exitBuffer":
+        Boolean commit = call.argument("commit");
+        result.success(bridge.exitPrinterBuffer(Boolean.TRUE.equals(commit)));
+        break;
+
       default:
         result.notImplemented();
     }

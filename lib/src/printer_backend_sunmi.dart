@@ -40,6 +40,8 @@ class PrinterBackendSunmi implements PrinterBackend {
     Future<void> Function()? unbind,
     Future<int> Function()? updateState,
     Future<bool> Function(List<int>)? doPrintBitmap,
+    Future<bool> Function(bool)? enterBuffer,
+    Future<bool> Function(bool)? exitBuffer,
   }) : _renderer = renderer,
        _bind = bind ?? (() async => await _channel.invokeMethod<bool>('bind') ?? false),
        _unbind = unbind ?? (() => _channel.invokeMethod('unbind')),
@@ -54,6 +56,20 @@ class PrinterBackendSunmi implements PrinterBackend {
                await _channel.invokeMethod<bool>('printBitmap', {
                  'bytes': Uint8List.fromList(bytes),
                }) ??
+               false),
+       _enterBuffer =
+           enterBuffer ??
+           ((clean) async =>
+               await _channel.invokeMethod<bool>('enterBuffer', {
+                 'clean': clean,
+               }) ??
+               false),
+       _exitBuffer =
+           exitBuffer ??
+           ((commit) async =>
+               await _channel.invokeMethod<bool>('exitBuffer', {
+                 'commit': commit,
+               }) ??
                false);
 
   static const MethodChannel _channel = MethodChannel('blue_thermal_printer/sunmi');
@@ -63,6 +79,14 @@ class PrinterBackendSunmi implements PrinterBackend {
   final Future<void> Function() _unbind;
   final Future<int> Function() _updateState;
   final Future<bool> Function(List<int>) _doPrintBitmap;
+
+  /// Masuk/keluar mode buffer Sunmi (`enterPrinterBuffer`/`exitPrinterBuffer`
+  /// di AIDL) -- dipakai sebagai kebersihan best-effort di [_send], BUKAN
+  /// penentu sukses/gagal cetak. API ini belum diverifikasi di semua
+  /// hardware vendor, jadi kegagalannya sengaja tidak pernah menggagalkan
+  /// pencetakan yang sebenarnya berhasil.
+  final Future<bool> Function(bool clean) _enterBuffer;
+  final Future<bool> Function(bool commit) _exitBuffer;
 
   bool _busy = false;
 
@@ -185,8 +209,34 @@ class PrinterBackendSunmi implements PrinterBackend {
           PrinterFailure('Printer belum terhubung. Buka Koneksi Printer.'),
         );
       }
+      // Cek status LEBIH DULU, sebelum satu bitmap pun dikirim -- ini yang
+      // menghindari alur buggy sebagian firmware vendor (mis. Xcheng) yang
+      // baru memperbarui status fisik lama sekali SETELAH printBitmap()
+      // dipanggil. Query berdiri sendiri di sini terbukti cepat & akurat
+      // karena tidak memicu alur itu sama sekali. Status `unknown` sengaja
+      // tidak memblokir (`hasKnownProblem` sudah dirancang begitu).
+      final preStatus = await _rawStatus();
+      if (preStatus.hasKnownProblem) {
+        return PrinterErr(PrinterFailure(preStatus.problemMessage!));
+      }
       final bytes = await _renderer.preview(receipt);
-      if (!await _doPrintBitmap(bytes)) {
+      // enterPrinterBuffer/exitPrinterBuffer cuma kebersihan best-effort
+      // (buang sisa buffer dari percobaan sebelumnya) -- API ini belum
+      // diverifikasi di semua hardware vendor, jadi kegagalannya SENGAJA
+      // diabaikan dan tidak pernah menggantikan hasil `_doPrintBitmap` yang
+      // sesungguhnya sebagai penentu sukses/gagal.
+      try {
+        await _enterBuffer(true);
+      } catch (_) {
+        // Lanjut cetak walau gagal masuk mode buffer.
+      }
+      final printed = await _doPrintBitmap(bytes);
+      try {
+        await _exitBuffer(true);
+      } catch (_) {
+        // Diabaikan -- hasil `_doPrintBitmap` tetap yang dipercaya.
+      }
+      if (!printed) {
         return const PrinterErr(
           PrinterFailure(
             'Pengiriman gagal. Periksa kertas sebelum mencoba ulang.',
@@ -195,15 +245,7 @@ class PrinterBackendSunmi implements PrinterBackend {
       }
       final status = await _rawStatus();
       if (status.hasKnownProblem) {
-        return PrinterErr(
-          PrinterFailure(
-            status.hasPaper == false
-                ? 'Kertas printer habis.'
-                : status.coverClosed == false
-                ? 'Penutup printer terbuka.'
-                : 'Printer melaporkan galat.',
-          ),
-        );
+        return PrinterErr(PrinterFailure(status.problemMessage!));
       }
       return const PrinterOk(null);
     } catch (_) {

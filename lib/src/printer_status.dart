@@ -25,6 +25,18 @@ class PrinterStatus {
   bool get hasKnownProblem =>
       hasPaper == false || coverClosed == false || hasError == true;
 
+  /// Pesan yang menjelaskan masalah yang diketahui, atau `null` bila
+  /// [hasKnownProblem] `false`. Satu sumber pesan dipakai bersama oleh
+  /// semua backend (`PrinterBackendEscpos`/`PrinterBackendSunmi`) untuk
+  /// pre-check maupun pengecekan pasca-cetak, supaya teksnya konsisten dan
+  /// tidak diduplikasi tiap implementasi.
+  String? get problemMessage {
+    if (hasPaper == false) return 'Kertas printer habis.';
+    if (coverClosed == false) return 'Penutup printer terbuka.';
+    if (hasError == true) return 'Printer melaporkan galat.';
+    return null;
+  }
+
   /// Decode byte respons `DLE EOT 2` (offline status) sesuai spec ESC/POS:
   /// bit 2 = cover terbuka, bit 5 = berhenti karena kertas habis, bit 6 =
   /// galat terjadi.

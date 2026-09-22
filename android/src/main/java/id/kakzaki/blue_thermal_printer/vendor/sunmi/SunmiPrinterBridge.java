@@ -109,6 +109,37 @@ public class SunmiPrinterBridge {
     }
   }
 
+  /** Masuk mode buffer (`enterPrinterBuffer` AIDL) -- kebersihan best-effort
+   * sebelum mencetak, bukan syarat sukses/gagal. `clean=true` membuang sisa
+   * buffer dari percobaan sebelumnya bila sesi buffer sebelumnya belum
+   * sempat di-exit dengan benar. Mengembalikan `false` (tanpa melempar)
+   * bila servis belum tersambung atau panggilan AIDL gagal. */
+  public boolean enterPrinterBuffer(boolean clean) {
+    if (woyouService == null) return false;
+    try {
+      woyouService.enterPrinterBuffer(clean);
+      return true;
+    } catch (RemoteException error) {
+      Log.w(TAG, "Gagal masuk mode buffer printer Sunmi", error);
+      return false;
+    }
+  }
+
+  /** Keluar mode buffer (`exitPrinterBuffer` AIDL). `commit=true` mencetak
+   * isi buffer, `commit=false` membuangnya. Sama seperti
+   * {@link #enterPrinterBuffer(boolean)}, ini cuma kebersihan best-effort --
+   * mengembalikan `false` (tanpa melempar) bila gagal. */
+  public boolean exitPrinterBuffer(boolean commit) {
+    if (woyouService == null) return false;
+    try {
+      woyouService.exitPrinterBuffer(commit);
+      return true;
+    } catch (RemoteException error) {
+      Log.w(TAG, "Gagal keluar mode buffer printer Sunmi", error);
+      return false;
+    }
+  }
+
   public interface Callback {
     void onResult(boolean success);
   }
