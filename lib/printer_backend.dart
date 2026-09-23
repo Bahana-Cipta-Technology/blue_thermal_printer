@@ -13,6 +13,7 @@ export 'src/printer_backend_escpos.dart';
 export 'src/printer_backend_sunmi.dart';
 export 'src/printer_device.dart';
 export 'src/printer_status.dart';
+export 'src/printer_vendor.dart';
 export 'src/receipt.dart';
 export 'src/receipt_renderer.dart';
 export 'src/result.dart';
