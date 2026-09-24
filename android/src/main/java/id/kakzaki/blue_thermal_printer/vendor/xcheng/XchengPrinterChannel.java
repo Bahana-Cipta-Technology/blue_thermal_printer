@@ -1,4 +1,4 @@
-package id.kakzaki.blue_thermal_printer.vendor.sunmi;
+package id.kakzaki.blue_thermal_printer.vendor.xcheng;
 
 import android.content.Context;
 import android.os.Handler;
@@ -13,21 +13,19 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
 import io.flutter.plugin.common.MethodChannel.Result;
 
 /**
- * Method channel terisolasi untuk backend printer bawaan Sunmi, terpisah dari
- * channel ESC/POS ("blue_thermal_printer/methods") yang sudah ada di
- * {@link id.kakzaki.blue_thermal_printer.BlueThermalPrinterPlugin} -- supaya
- * kode dua vendor tidak saling campur dan bisa dites/dimatikan terpisah.
+ * Method channel terisolasi untuk backend printer bawaan Xcheng ("blue_thermal_printer/xcheng"),
+ * terpisah dari channel ESC/POS dan Sunmi.
  */
-public class SunmiPrinterChannel implements MethodCallHandler {
+public class XchengPrinterChannel implements MethodCallHandler {
 
-  private static final String CHANNEL_NAME = "blue_thermal_printer/sunmi";
+  private static final String CHANNEL_NAME = "blue_thermal_printer/xcheng";
 
-  private final SunmiPrinterBridge bridge;
+  private final XchengPrinterBridge bridge;
   private final MethodChannel channel;
   private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
-  public SunmiPrinterChannel(Context context, BinaryMessenger messenger) {
-    bridge = new SunmiPrinterBridge(context.getApplicationContext());
+  public XchengPrinterChannel(Context context, BinaryMessenger messenger) {
+    bridge = new XchengPrinterBridge(context.getApplicationContext());
     channel = new MethodChannel(messenger, CHANNEL_NAME);
     channel.setMethodCallHandler(this);
   }
@@ -44,18 +42,18 @@ public class SunmiPrinterChannel implements MethodCallHandler {
         result.success(null);
         break;
 
-      case "updateState":
-        result.success(bridge.updatePrinterState());
+      case "hasPaper":
+        result.success(bridge.hasPaper());
         break;
 
-      case "printTransaction":
+      case "printBitmap":
         byte[] bytes = call.argument("bytes");
         Integer feedLines = call.argument("feedLines");
         if (bytes == null) {
           result.error("invalid_argument", "argument 'bytes' not found", null);
           break;
         }
-        bridge.printTransaction(bytes, feedLines == null ? 0 : feedLines,
+        bridge.printBitmap(bytes, feedLines == null ? 0 : feedLines,
             outcome -> mainHandler.post(() -> result.success(outcome)));
         break;
 

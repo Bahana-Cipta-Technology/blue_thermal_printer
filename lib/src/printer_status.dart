@@ -45,4 +45,18 @@ class PrinterStatus {
     coverClosed: (byte & 0x04) == 0,
     hasError: (byte & 0x40) != 0,
   );
+
+  /// Seperti [PrinterStatus.fromOfflineStatusByte], tapi mengembalikan
+  /// [unknown] bila [byte] bukan respons `DLE EOT` yang sah. Semua respons
+  /// `DLE EOT n` punya pola bit tetap (bit 0 = 0, bit 1 = 1, bit 4 = 1,
+  /// bit 7 = 0) -- byte lain (mis. XON `0x11`/XOFF `0x13` dari flow control,
+  /// atau sampah) jangan sampai dibaca sebagai status.
+  static PrinterStatus tryFromOfflineStatusByte(int byte) =>
+      isValidRealtimeStatusByte(byte)
+      ? PrinterStatus.fromOfflineStatusByte(byte)
+      : unknown;
+
+  /// `true` bila [byte] cocok dengan pola bit tetap respons `DLE EOT n`.
+  static bool isValidRealtimeStatusByte(int byte) =>
+      byte >= 0 && byte <= 0xFF && (byte & 0x93) == 0x12;
 }

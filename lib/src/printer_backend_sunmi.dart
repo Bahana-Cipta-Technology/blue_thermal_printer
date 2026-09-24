@@ -1,7 +1,6 @@
-import 'dart:async';
-
 import 'package:flutter/services.dart';
 
+import 'print_job_gate.dart';
 import 'printer_backend.dart';
 import 'printer_device.dart';
 import 'printer_status.dart';
@@ -24,6 +23,44 @@ const kSunmiBuiltInDevice = PrinterDevice(
 /// Sunmi untuk "printer tidak terdeteksi").
 const _stateNotDetected = 505;
 
+/// Terjemahkan kode `updatePrinterState()` AIDL Sunmi jadi [PrinterStatus].
+///
+/// Tabel resmi (doc `IWoyouService.aidl`): 1 normal, 2 printer sedang
+/// memperbarui status, 3 gagal membaca status, 4 kertas habis, 5 overheat,
+/// 6 cover terbuka, 7 cutter abnormal, 8 cutter pulih, 505 printer tidak
+/// terdeteksi, 507 upgrade firmware gagal. Kode transien/tak pasti (2, 3, 8,
+/// 9, dan kode tak dikenal) sengaja jadi [PrinterStatus.unknown] supaya tidak
+/// memblokir cetak tanpa bukti masalah. 505 tidak dipetakan di sini --
+/// pemanggil memperlakukannya sebagai "tidak terhubung", bukan status fisik.
+PrinterStatus sunmiStateToStatus(int code) => switch (code) {
+  1 => const PrinterStatus(hasPaper: true, coverClosed: true, hasError: false),
+  4 => const PrinterStatus(hasPaper: false),
+  6 => const PrinterStatus(coverClosed: false),
+  5 || 7 || 507 => const PrinterStatus(hasError: true),
+  _ => PrinterStatus.unknown,
+};
+
+/// Hasil satu transaksi cetak Sunmi (`exitPrinterBufferWithCallback` →
+/// `onPrintResult`).
+enum SunmiPrintOutcome {
+  /// Printer melaporkan struk benar-benar tercetak (`onPrintResult` kode 0).
+  printed,
+
+  /// Printer melaporkan transaksi gagal (kode 1 atau `onRaiseException`).
+  failed,
+
+  /// Tidak ada jawaban pasti -- firmware lama/klon yang tidak mendukung
+  /// callback transaksi, atau callback tidak datang dalam batas waktu. Data
+  /// tetap sudah dikirim; hasil diverifikasi ulang lewat query status.
+  unknown;
+
+  static SunmiPrintOutcome parse(Object? raw) => switch (raw) {
+    'printed' => printed,
+    'failed' => failed,
+    _ => unknown,
+  };
+}
+
 /// Implementasi [PrinterBackend] memakai servis printer bawaan Sunmi
 /// ("Woyou") lewat AIDL, dibungkus native oleh `SunmiPrinterBridge`/
 /// `SunmiPrinterChannel` (`android/.../vendor/sunmi/`).
@@ -39,10 +76,14 @@ class PrinterBackendSunmi implements PrinterBackend {
     Future<bool> Function()? bind,
     Future<void> Function()? unbind,
     Future<int> Function()? updateState,
-    Future<bool> Function(List<int>)? doPrintBitmap,
-    Future<bool> Function(bool)? enterBuffer,
-    Future<bool> Function(bool)? exitBuffer,
+    Future<SunmiPrintOutcome> Function(List<int> png, int feedLines)?
+    printTransaction,
+    Duration connectPollInterval = const Duration(milliseconds: 200),
+    Duration printTimeout = const Duration(seconds: 30),
+    Duration stuckAfter = const Duration(seconds: 30),
   }) : _renderer = renderer,
+       _connectPollInterval = connectPollInterval,
+       _gate = PrintJobGate(timeout: printTimeout, stuckAfter: stuckAfter),
        _bind = bind ?? (() async => await _channel.invokeMethod<bool>('bind') ?? false),
        _unbind = unbind ?? (() => _channel.invokeMethod('unbind')),
        _updateState =
@@ -50,45 +91,38 @@ class PrinterBackendSunmi implements PrinterBackend {
            (() async =>
                await _channel.invokeMethod<int>('updateState') ??
                _stateNotDetected),
-       _doPrintBitmap =
-           doPrintBitmap ??
-           ((bytes) async =>
-               await _channel.invokeMethod<bool>('printBitmap', {
-                 'bytes': Uint8List.fromList(bytes),
-               }) ??
-               false),
-       _enterBuffer =
-           enterBuffer ??
-           ((clean) async =>
-               await _channel.invokeMethod<bool>('enterBuffer', {
-                 'clean': clean,
-               }) ??
-               false),
-       _exitBuffer =
-           exitBuffer ??
-           ((commit) async =>
-               await _channel.invokeMethod<bool>('exitBuffer', {
-                 'commit': commit,
-               }) ??
-               false);
+       _printTransaction =
+           printTransaction ??
+           ((png, feedLines) async => SunmiPrintOutcome.parse(
+             await _channel.invokeMethod<String>('printTransaction', {
+               'bytes': Uint8List.fromList(png),
+               'feedLines': feedLines,
+             }),
+           ));
 
   static const MethodChannel _channel = MethodChannel('blue_thermal_printer/sunmi');
 
+  /// Baris kosong yang di-feed setelah struk supaya baris terakhir melewati
+  /// tear bar (bitmap sendiri cuma punya margin bawah beberapa piksel).
+  static const feedLines = 3;
+
+  /// Berapa kali [connect] memeriksa servis setelah bind -- bind bersifat
+  /// async dan di boot dingin servis Sunmi bisa butuh beberapa detik.
+  static const _connectPollAttempts = 15;
+
   final ReceiptRenderer _renderer;
+  final Duration _connectPollInterval;
+  final PrintJobGate _gate;
   final Future<bool> Function() _bind;
   final Future<void> Function() _unbind;
   final Future<int> Function() _updateState;
-  final Future<bool> Function(List<int>) _doPrintBitmap;
 
-  /// Masuk/keluar mode buffer Sunmi (`enterPrinterBuffer`/`exitPrinterBuffer`
-  /// di AIDL) -- dipakai sebagai kebersihan best-effort di [_send], BUKAN
-  /// penentu sukses/gagal cetak. API ini belum diverifikasi di semua
-  /// hardware vendor, jadi kegagalannya sengaja tidak pernah menggagalkan
-  /// pencetakan yang sebenarnya berhasil.
-  final Future<bool> Function(bool clean) _enterBuffer;
-  final Future<bool> Function(bool commit) _exitBuffer;
-
-  bool _busy = false;
+  /// Satu transaksi buffer penuh di native: enter buffer → bitmap → feed →
+  /// `exitPrinterBufferWithCallback`. Beda dari `printBitmap` polos yang
+  /// callback-nya (`onRunResult`) menurut doc AIDL cuma menandakan panggilan
+  /// API diterima, BUKAN struk tercetak.
+  final Future<SunmiPrintOutcome> Function(List<int> png, int feedLines)
+  _printTransaction;
 
   @override
   String get displayName => 'Printer Bawaan Sunmi';
@@ -125,9 +159,9 @@ class PrinterBackendSunmi implements PrinterBackend {
       }
       // bindService bersifat async (menunggu callback servis tersambung) --
       // beri jeda pendek dengan beberapa percobaan sebelum menyerah.
-      for (var attempt = 0; attempt < 5; attempt++) {
+      for (var attempt = 0; attempt < _connectPollAttempts; attempt++) {
         if (await isAvailable()) return const PrinterOk(null);
-        await Future.delayed(const Duration(milliseconds: 200));
+        await Future.delayed(_connectPollInterval);
       }
       return const PrinterErr(
         PrinterFailure('Printer bawaan tidak terdeteksi.'),
@@ -151,20 +185,8 @@ class PrinterBackendSunmi implements PrinterBackend {
   @override
   Future<bool> isConnected() => isAvailable();
 
-  Future<PrinterStatus> _rawStatus() async {
-    final state = await _updateState();
-    if (state == 1) {
-      // NORMAL -- AIDL menyediakan status pasti, beda dari ESC/POS yang cuma
-      // bisa menebak lewat byte offline status.
-      return const PrinterStatus(hasPaper: true, coverClosed: true, hasError: false);
-    }
-    if (state == 3) return const PrinterStatus(hasPaper: false); // OUT_OF_PAPER
-    if (state == 6) return const PrinterStatus(coverClosed: false); // OPEN_THE_LID
-    if (state == 5 || state == 7) {
-      return const PrinterStatus(hasError: true); // OVERHEATED / PAPER_CUTTER_ABNORMAL
-    }
-    return PrinterStatus.unknown;
-  }
+  Future<PrinterStatus> _rawStatus() async =>
+      sunmiStateToStatus(await _updateState());
 
   @override
   Future<PrinterResult<PrinterStatus>> checkStatus() async {
@@ -179,28 +201,8 @@ class PrinterBackendSunmi implements PrinterBackend {
   }
 
   @override
-  Future<PrinterResult<void>> printReceipt(Receipt receipt) async {
-    if (_busy) {
-      return const PrinterErr(
-        PrinterFailure('Printer masih memproses pengiriman sebelumnya.'),
-      );
-    }
-    _busy = true;
-    final operation = _send(receipt);
-    unawaited(
-      operation.then((_) {
-        _busy = false;
-      }),
-    );
-    return operation.timeout(
-      const Duration(seconds: 30),
-      onTimeout: () => const PrinterErr(
-        PrinterFailure(
-          'Pengiriman melewati batas waktu. Periksa kertas sebelum mencoba ulang.',
-        ),
-      ),
-    );
-  }
+  Future<PrinterResult<void>> printReceipt(Receipt receipt) =>
+      _gate.run(() => _send(receipt));
 
   Future<PrinterResult<void>> _send(Receipt receipt) async {
     try {
@@ -209,51 +211,51 @@ class PrinterBackendSunmi implements PrinterBackend {
           PrinterFailure('Printer belum terhubung. Buka Koneksi Printer.'),
         );
       }
-      // Cek status LEBIH DULU, sebelum satu bitmap pun dikirim -- ini yang
-      // menghindari alur buggy sebagian firmware vendor (mis. Xcheng) yang
-      // baru memperbarui status fisik lama sekali SETELAH printBitmap()
-      // dipanggil. Query berdiri sendiri di sini terbukti cepat & akurat
-      // karena tidak memicu alur itu sama sekali. Status `unknown` sengaja
-      // tidak memblokir (`hasKnownProblem` sudah dirancang begitu).
+      // Cek status LEBIH DULU, sebelum satu bitmap pun dikirim, supaya data
+      // tidak ikut nyangkut di buffer printer yang sudah bermasalah. Status
+      // `unknown` sengaja tidak memblokir (`hasKnownProblem` dirancang begitu).
       final preStatus = await _rawStatus();
       if (preStatus.hasKnownProblem) {
         return PrinterErr(PrinterFailure(preStatus.problemMessage!));
       }
       final bytes = await _renderer.preview(receipt);
-      // enterPrinterBuffer/exitPrinterBuffer cuma kebersihan best-effort
-      // (buang sisa buffer dari percobaan sebelumnya) -- API ini belum
-      // diverifikasi di semua hardware vendor, jadi kegagalannya SENGAJA
-      // diabaikan dan tidak pernah menggantikan hasil `_doPrintBitmap` yang
-      // sesungguhnya sebagai penentu sukses/gagal.
-      try {
-        await _enterBuffer(true);
-      } catch (_) {
-        // Lanjut cetak walau gagal masuk mode buffer.
+      final outcome = await _printTransaction(bytes, feedLines);
+      switch (outcome) {
+        case SunmiPrintOutcome.printed:
+          return const PrinterOk(null);
+        case SunmiPrintOutcome.failed:
+          // Printer sudah pasti gagal -- query status hanya untuk memberi
+          // pesan yang lebih spesifik bila penyebabnya diketahui.
+          final status = await _statusOrUnknown();
+          return PrinterErr(
+            PrinterFailure(
+              status.problemMessage ??
+                  'Printer gagal mencetak. Periksa kertas sebelum mencoba ulang.',
+            ),
+          );
+        case SunmiPrintOutcome.unknown:
+          // Firmware tidak memberi jawaban pasti -- verifikasi ulang lewat
+          // status seperti perilaku sebelum mode transaksi dipakai.
+          final status = await _rawStatus();
+          if (status.hasKnownProblem) {
+            return PrinterErr(PrinterFailure(status.problemMessage!));
+          }
+          return const PrinterOk(null);
       }
-      final printed = await _doPrintBitmap(bytes);
-      try {
-        await _exitBuffer(true);
-      } catch (_) {
-        // Diabaikan -- hasil `_doPrintBitmap` tetap yang dipercaya.
-      }
-      if (!printed) {
-        return const PrinterErr(
-          PrinterFailure(
-            'Pengiriman gagal. Periksa kertas sebelum mencoba ulang.',
-          ),
-        );
-      }
-      final status = await _rawStatus();
-      if (status.hasKnownProblem) {
-        return PrinterErr(PrinterFailure(status.problemMessage!));
-      }
-      return const PrinterOk(null);
     } catch (_) {
       return const PrinterErr(
         PrinterFailure(
           'Tidak dapat mengirim struk. Periksa koneksi dan kertas sebelum mencoba ulang.',
         ),
       );
+    }
+  }
+
+  Future<PrinterStatus> _statusOrUnknown() async {
+    try {
+      return await _rawStatus();
+    } catch (_) {
+      return PrinterStatus.unknown;
     }
   }
 

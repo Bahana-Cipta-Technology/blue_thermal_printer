@@ -22,6 +22,16 @@ class ReceiptRenderer {
   static const paper = Color(0xFFFFFFFF);
 
   Future<ui.Image> render(Receipt receipt) async {
+    // Raster ESC/POS dikemas 8 piksel per byte; lebar yang bukan kelipatan 8
+    // membuat [encode] membaca piksel baris berikutnya (gambar bergeser) atau
+    // keluar batas buffer di baris terakhir.
+    if (width <= 0 || width % 8 != 0) {
+      throw ArgumentError.value(
+        width,
+        'width',
+        'harus bilangan positif kelipatan 8',
+      );
+    }
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     double y = 8;

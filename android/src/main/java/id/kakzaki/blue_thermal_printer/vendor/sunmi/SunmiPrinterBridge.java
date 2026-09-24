@@ -13,6 +13,7 @@ import android.util.Log;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import woyou.aidlservice.jiuiv5.ICallback;
 import woyou.aidlservice.jiuiv5.IWoyouService;
@@ -20,21 +21,17 @@ import woyou.aidlservice.jiuiv5.IWoyouService;
 /**
  * Jembatan ke servis printer bawaan Sunmi ("Woyou") lewat AIDL.
  *
- * Struktur bind/unbind dan sebagian besar method di sini diadaptasi dari
- * {@code SunmiPrinterMethod.java} milik paket pub.dev {@code sunmi_printer_plus}
- * (https://github.com/brasizza/sunmi_printer, BSD-3-Clause -- lihat
- * LICENSE-sunmi_printer_plus di folder ini), diringkas hanya untuk method yang
- * dipakai kontrak {@code PrinterBackend}: bind/unbind, query status
- * ({@link #updatePrinterState()}), dan cetak satu bitmap penuh
- * ({@link #printBitmap(byte[], Callback)}).
+ * Struktur bind/unbind diadaptasi dari {@code SunmiPrinterMethod.java} milik paket pub.dev
+ * {@code sunmi_printer_plus} (https://github.com/brasizza/sunmi_printer, BSD-3-Clause -- lihat
+ * LICENSE-sunmi_printer_plus di folder ini), diringkas hanya untuk method yang dipakai kontrak
+ * {@code PrinterBackend}: bind/unbind, query status ({@link #updatePrinterState()}), dan cetak
+ * satu struk sebagai transaksi buffer ({@link #printTransaction(byte[], int, TransactionCallback)}).
  *
- * Beda dari upstream: {@link ICallback} di sini diimplementasikan sungguhan
- * (bukan stub kosong) -- {@code onRunResult}/{@code onRaiseException}
- * menyelesaikan hasil lewat {@link ArrayBlockingQueue} satu slot, dengan
- * timeout fallback (pola sama seperti mailbox status ESC/POS di
- * {@code BlueThermalPrinterPlugin.ConnectedThread}), supaya panggilan AIDL
- * yang callback-nya tidak pernah dipanggil oleh firmware tertentu tidak
- * menggantung selamanya.
+ * Cetak sengaja lewat mode transaksi, bukan {@code printBitmap} polos: menurut doc
+ * {@link ICallback#onRunResult(boolean)}, callback itu hanya menandakan panggilan API diterima,
+ * bukan hasil kerja printer -- hasil sungguhan (kertas habis di tengah cetak, dst.) hanya datang
+ * lewat {@link ICallback#onPrintResult(int, String)} milik
+ * {@code exitPrinterBufferWithCallback}.
  */
 public class SunmiPrinterBridge {
 
@@ -47,14 +44,26 @@ public class SunmiPrinterBridge {
    * terdeteksi", supaya pemanggil tidak perlu tahu ada dua sumber kode. */
   public static final int STATE_NOT_DETECTED = 505;
 
-  // Cukup untuk satu panggilan AIDL lokal (bukan jaringan) merespons, tapi
-  // tidak menahan pemanggil lama-lama kalau firmware tidak pernah memanggil
-  // ICallback sama sekali.
-  private static final long PRINT_CALLBACK_TIMEOUT_MILLIS = 3_000;
+  /** Nilai outcome transaksi yang dikirim ke Dart (lihat `SunmiPrintOutcome`). */
+  public static final String OUTCOME_PRINTED = "printed";
+  public static final String OUTCOME_FAILED = "failed";
+  public static final String OUTCOME_UNKNOWN = "unknown";
+
+  // Batas tunggu onPrintResult. Struk parkir tercetak dalam hitungan detik; firmware yang tidak
+  // mendukung exitPrinterBufferWithCallback (Sunmi: T1mini < v2.4.1, sebagian klon) tidak pernah
+  // memanggil callback sama sekali, jadi jangan menahan pemanggil jauh lebih lama dari ini.
+  private static final long TRANSACTION_RESULT_TIMEOUT_MILLIS = 12_000;
 
   private final Context context;
   private final ExecutorService executor = Executors.newSingleThreadExecutor();
-  private IWoyouService woyouService;
+  private volatile IWoyouService woyouService;
+
+  /** {@code null} = belum diketahui; {@code false} = jangan tunggu callback transaksi, langsung
+   * commit polos. Diset {@code false} sejak awal bila AIDL Woyou disediakan servis klon (bukan
+   * paket Sunmi asli -- mis. {@code com.xcheng.printerservice}, yang terbukti tidak pernah
+   * memanggil callback transaksi), atau setelah callback pernah tidak datang sama sekali, supaya
+   * jeda timeout tidak dibayar di tiap cetakan. */
+  private volatile Boolean transactionCallbackSupported;
 
   public SunmiPrinterBridge(Context context) {
     this.context = context;
@@ -64,10 +73,32 @@ public class SunmiPrinterBridge {
     @Override
     public void onServiceConnected(ComponentName name, IBinder binder) {
       woyouService = IWoyouService.Stub.asInterface(binder);
+      boolean genuineSunmi = SERVICE_PACKAGE.equals(name.getPackageName());
+      if (!genuineSunmi) {
+        Log.i(TAG, "AIDL Woyou disediakan " + name.getPackageName()
+            + " (bukan Sunmi asli) -- callback transaksi tidak ditunggu");
+      }
+      transactionCallbackSupported = genuineSunmi ? null : Boolean.FALSE;
     }
 
     @Override
     public void onServiceDisconnected(ComponentName name) {
+      // BIND_AUTO_CREATE menyambung ulang otomatis saat servis hidup lagi.
+      woyouService = null;
+    }
+
+    @Override
+    public void onBindingDied(ComponentName name) {
+      // Binding ini tidak akan pernah tersambung lagi dengan sendirinya (mis. paket servis
+      // di-update) -- wajib unbind lalu bind ulang.
+      Log.w(TAG, "Binding servis printer Sunmi mati, bind ulang");
+      unbindPrinterService();
+      bindPrinterService();
+    }
+
+    @Override
+    public void onNullBinding(ComponentName name) {
+      Log.w(TAG, "Servis printer Sunmi menolak binding (onBind mengembalikan null)");
       woyouService = null;
     }
   };
@@ -100,108 +131,108 @@ public class SunmiPrinterBridge {
   /** Query status fisik printer. Mengembalikan {@link #STATE_NOT_DETECTED}
    * bila servis belum tersambung atau panggilan AIDL gagal. */
   public int updatePrinterState() {
-    if (woyouService == null) return STATE_NOT_DETECTED;
+    IWoyouService service = woyouService;
+    if (service == null) return STATE_NOT_DETECTED;
     try {
-      return woyouService.updatePrinterState();
+      return service.updatePrinterState();
     } catch (RemoteException error) {
       Log.w(TAG, "Query status printer Sunmi gagal", error);
       return STATE_NOT_DETECTED;
     }
   }
 
-  /** Masuk mode buffer (`enterPrinterBuffer` AIDL) -- kebersihan best-effort
-   * sebelum mencetak, bukan syarat sukses/gagal. `clean=true` membuang sisa
-   * buffer dari percobaan sebelumnya bila sesi buffer sebelumnya belum
-   * sempat di-exit dengan benar. Mengembalikan `false` (tanpa melempar)
-   * bila servis belum tersambung atau panggilan AIDL gagal. */
-  public boolean enterPrinterBuffer(boolean clean) {
-    if (woyouService == null) return false;
-    try {
-      woyouService.enterPrinterBuffer(clean);
-      return true;
-    } catch (RemoteException error) {
-      Log.w(TAG, "Gagal masuk mode buffer printer Sunmi", error);
-      return false;
-    }
-  }
-
-  /** Keluar mode buffer (`exitPrinterBuffer` AIDL). `commit=true` mencetak
-   * isi buffer, `commit=false` membuangnya. Sama seperti
-   * {@link #enterPrinterBuffer(boolean)}, ini cuma kebersihan best-effort --
-   * mengembalikan `false` (tanpa melempar) bila gagal. */
-  public boolean exitPrinterBuffer(boolean commit) {
-    if (woyouService == null) return false;
-    try {
-      woyouService.exitPrinterBuffer(commit);
-      return true;
-    } catch (RemoteException error) {
-      Log.w(TAG, "Gagal keluar mode buffer printer Sunmi", error);
-      return false;
-    }
-  }
-
-  public interface Callback {
-    void onResult(boolean success);
+  public interface TransactionCallback {
+    void onOutcome(String outcome);
   }
 
   /** Cetak satu gambar penuh (bytes gambar biasa, mis. PNG -- didekode lewat
-   * {@link BitmapFactory}, bukan raw pixel). */
-  public void printBitmap(byte[] encodedImage, Callback callback) {
-    if (woyouService == null) {
-      callback.onResult(false);
-      return;
-    }
-    final Bitmap bitmap = BitmapFactory.decodeByteArray(encodedImage, 0, encodedImage.length);
-    if (bitmap == null) {
-      callback.onResult(false);
-      return;
+   * {@link BitmapFactory}, bukan raw pixel) sebagai satu transaksi buffer, lalu feed
+   * {@code feedLines} baris. Dijalankan di thread background; {@code callback} dipanggil
+   * tepat sekali dengan salah satu {@code OUTCOME_*}. */
+  public void printTransaction(byte[] encodedImage, int feedLines, TransactionCallback callback) {
+    executor.execute(() -> callback.onOutcome(runTransaction(encodedImage, feedLines)));
+  }
+
+  private String runTransaction(byte[] encodedImage, int feedLines) {
+    IWoyouService service = woyouService;
+    if (service == null) return OUTCOME_FAILED;
+    Bitmap bitmap = BitmapFactory.decodeByteArray(encodedImage, 0, encodedImage.length);
+    if (bitmap == null) return OUTCOME_FAILED;
+
+    try {
+      // clean=true membuang sisa buffer dari transaksi sebelumnya yang tidak sempat di-exit.
+      service.enterPrinterBuffer(true);
+      service.printBitmap(bitmap, null);
+      service.lineWrap(feedLines, null);
+    } catch (RemoteException | RuntimeException error) {
+      Log.w(TAG, "Gagal mengisi buffer transaksi printer Sunmi", error);
+      commitQuietly(service);
+      return OUTCOME_UNKNOWN;
     }
 
-    final ArrayBlockingQueue<Boolean> mailbox = new ArrayBlockingQueue<>(1);
+    if (Boolean.FALSE.equals(transactionCallbackSupported)) {
+      commitQuietly(service);
+      return OUTCOME_UNKNOWN;
+    }
+
+    final ArrayBlockingQueue<String> mailbox = new ArrayBlockingQueue<>(1);
     try {
-      woyouService.printBitmap(bitmap, new ICallback.Stub() {
+      service.exitPrinterBufferWithCallback(true, new ICallback.Stub() {
         @Override
         public void onRunResult(boolean isSuccess) {
-          mailbox.offer(isSuccess);
+          // Hanya menandakan API diterima, bukan hasil cetak -- tunggu onPrintResult.
         }
 
         @Override
         public void onReturnString(String result) {
-          // Tidak relevan untuk printBitmap.
+          // Tidak relevan untuk transaksi cetak.
         }
 
         @Override
         public void onRaiseException(int code, String msg) {
-          Log.w(TAG, "Sunmi printBitmap melaporkan galat " + code + ": " + msg);
-          mailbox.offer(false);
+          Log.w(TAG, "Transaksi Sunmi melaporkan galat " + code + ": " + msg);
+          mailbox.offer(OUTCOME_FAILED);
         }
 
         @Override
         public void onPrintResult(int code, String msg) {
-          // Hanya relevan untuk alur transaksi buffer (commitPrinterBufferWithCallback),
-          // tidak dipakai printBitmap polos -- sengaja diabaikan.
+          // Doc ICallback: 0 sukses, 1 gagal.
+          if (code != 0) Log.w(TAG, "Transaksi Sunmi gagal " + code + ": " + msg);
+          mailbox.offer(code == 0 ? OUTCOME_PRINTED : OUTCOME_FAILED);
         }
       });
-    } catch (RemoteException error) {
-      callback.onResult(false);
-      return;
+    } catch (RemoteException | RuntimeException error) {
+      Log.w(TAG, "exitPrinterBufferWithCallback gagal, commit tanpa callback", error);
+      commitQuietly(service);
+      return OUTCOME_UNKNOWN;
     }
 
-    executor.execute(() -> {
-      Boolean result;
-      try {
-        result = mailbox.poll(PRINT_CALLBACK_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS);
-      } catch (InterruptedException error) {
-        Thread.currentThread().interrupt();
-        result = null;
-      }
-      // Timeout (result == null) berarti firmware tidak memanggil ICallback
-      // sama sekali -- optimis anggap panggilan AIDL-nya sendiri berhasil
-      // terkirim (sama seperti upstream), karena kondisi fisik sungguhan
-      // tetap diverifikasi ulang lewat updatePrinterState() setelah ini oleh
-      // pemanggil (lihat PrinterBackendSunmi.printReceipt).
-      callback.onResult(result == null || result);
-    });
+    String outcome;
+    try {
+      outcome = mailbox.poll(TRANSACTION_RESULT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+    } catch (InterruptedException error) {
+      Thread.currentThread().interrupt();
+      outcome = null;
+    }
+    if (outcome == null) {
+      Log.w(TAG, "onPrintResult tidak datang dalam " + TRANSACTION_RESULT_TIMEOUT_MILLIS
+          + "ms -- anggap firmware tidak mendukung callback transaksi");
+      transactionCallbackSupported = false;
+      // Firmware yang diam-diam mengabaikan exitPrinterBufferWithCallback masih memegang isi
+      // buffer; commit polos mencetaknya (no-op bila transaksi sebenarnya sudah selesai).
+      commitQuietly(service);
+      return OUTCOME_UNKNOWN;
+    }
+    transactionCallbackSupported = true;
+    return outcome;
+  }
+
+  private void commitQuietly(IWoyouService service) {
+    try {
+      service.exitPrinterBuffer(true);
+    } catch (RemoteException | RuntimeException error) {
+      Log.w(TAG, "Gagal keluar mode buffer printer Sunmi", error);
+    }
   }
 
   public void dispose() {

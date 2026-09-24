@@ -5,6 +5,9 @@
          perlu tiap app konsumen menambahkan ini sendiri. -->
     <queries>
       <package android:name="woyou.aidlservice.jiuiv5" />
+      <!-- Servis printer bawaan Xcheng (vendor/xcheng/, backend opsional). Di perangkat Xcheng
+           servis ini juga yang menyediakan AIDL kompatibel Sunmi di atas. -->
+      <package android:name="com.xcheng.printerservice" />
     </queries>
 
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>

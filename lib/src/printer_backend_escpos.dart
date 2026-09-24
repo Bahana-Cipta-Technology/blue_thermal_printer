@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:typed_data';
 
@@ -7,6 +6,7 @@ import 'package:app_settings/app_settings.dart';
 import '../blue_thermal_printer.dart';
 import 'printer_backend.dart';
 import 'printer_device.dart';
+import 'print_job_gate.dart';
 import 'printer_status.dart';
 import 'receipt.dart';
 import 'receipt_renderer.dart';
@@ -16,8 +16,9 @@ import 'result.dart';
 /// SPP + perintah ESC/POS), lewat [BlueThermalPrinter] yang sudah ada di
 /// package ini sendiri.
 ///
-/// Pengiriman tunggal (busy-lock); timeout tidak membatalkan pekerjaan
-/// native yang tertunda. Setiap pemanggilan dibungkus try/catch dan
+/// Pengiriman tunggal (busy-lock lewat [PrintJobGate]); timeout tidak
+/// membatalkan pekerjaan native yang tertunda, tapi pekerjaan yang macet
+/// terlalu lama memutus koneksi supaya write native terlepas. Setiap pemanggilan dibungkus try/catch dan
 /// diperlakukan sebagai "tidak tersedia" di platform yang tidak didukung
 /// plugin (mis. Linux desktop), sama seperti pola `DeviceCameraService` di
 /// app konsumen.
@@ -34,6 +35,8 @@ class PrinterBackendEscpos implements PrinterBackend {
     Future<List<int>> Function(Receipt)? encode,
     Future<PrinterStatus> Function()? checkStatus,
     Future<void> Function()? openSettings,
+    Duration printTimeout = const Duration(seconds: 30),
+    Duration stuckAfter = const Duration(seconds: 30),
   }) : _isBluetoothOn =
            isBluetoothOn ??
            (() async => await BlueThermalPrinter.instance.isOn ?? false),
@@ -84,14 +87,22 @@ class PrinterBackendEscpos implements PrinterBackend {
                final raw = await BlueThermalPrinter.instance
                    .queryPrinterStatus(BlueThermalPrinter.statusTypeOffline);
                if (raw == null) return PrinterStatus.unknown;
-               return PrinterStatus.fromOfflineStatusByte(raw);
+               return PrinterStatus.tryFromOfflineStatusByte(raw);
              } catch (_) {
                return PrinterStatus.unknown;
              }
            }),
        _openSettings =
            openSettings ??
-           (() => AppSettings.openAppSettings(type: AppSettingsType.bluetooth));
+           (() => AppSettings.openAppSettings(type: AppSettingsType.bluetooth)) {
+    // Write native yang macet (socket BT tidak lagi dibaca printer) hanya
+    // bisa dilepas dengan menutup socket-nya.
+    _gate = PrintJobGate(
+      timeout: printTimeout,
+      stuckAfter: stuckAfter,
+      onStuck: disconnect,
+    );
+  }
 
   final Future<bool> Function() _isBluetoothOn;
   final Future<bool> Function() _isPermissionGranted;
@@ -104,7 +115,51 @@ class PrinterBackendEscpos implements PrinterBackend {
   final Future<PrinterStatus> Function() _checkStatus;
   final Future<void> Function() _openSettings;
 
-  bool _busy = false;
+  late final PrintJobGate _gate;
+
+  /// Setelah berapa query status beruntun tanpa jawaban (dan belum pernah
+  /// ada jawaban sejak terhubung) printer dianggap tidak mendukung `DLE EOT`.
+  static const _unansweredStatusLimit = 2;
+
+  int _unansweredStatusQueries = 0;
+  bool _statusEverAnswered = false;
+
+  /// `true` bila printer yang sedang terhubung terbukti tidak menjawab query
+  /// status (mis. printer virtual `RPPInnerPrinter` di perangkat Xcheng) --
+  /// query berikutnya dilewati sampai koneksi baru, supaya tiap cetak tidak
+  /// membayar timeout native (±1,5 dtk per query, 2 query per cetak) tanpa
+  /// hasil.
+  bool get _statusUnsupported =>
+      !_statusEverAnswered && _unansweredStatusQueries >= _unansweredStatusLimit;
+
+  void _resetStatusSupport() {
+    _unansweredStatusQueries = 0;
+    _statusEverAnswered = false;
+  }
+
+  /// Query status lewat [_checkStatus], sambil belajar apakah printer ini
+  /// mendukungnya. Jawaban `DLE EOT` yang sah selalu mengisi ketiga field;
+  /// semua `null` berarti printer tidak menjawab.
+  Future<PrinterStatus> _queryStatus() async {
+    if (_statusUnsupported) return PrinterStatus.unknown;
+    final status = await _checkStatus();
+    final answered =
+        status.hasPaper != null ||
+        status.coverClosed != null ||
+        status.hasError != null;
+    if (answered) {
+      _statusEverAnswered = true;
+      _unansweredStatusQueries = 0;
+    } else {
+      _unansweredStatusQueries++;
+    }
+    return status;
+  }
+
+  /// Percobaan koneksi yang sedang berjalan -- panggilan [connect] bersamaan
+  /// (mis. auto-connect + tap pengguna) berbagi hasil yang sama alih-alih
+  /// membuka dua socket ke printer.
+  Future<PrinterResult<void>>? _pendingConnect;
 
   @override
   String get displayName => 'Bluetooth ESC/POS';
@@ -133,7 +188,17 @@ class PrinterBackendEscpos implements PrinterBackend {
   }
 
   @override
-  Future<PrinterResult<void>> connect(PrinterDevice device) async {
+  Future<PrinterResult<void>> connect(PrinterDevice device) {
+    final pending = _pendingConnect;
+    if (pending != null) return pending;
+    final attempt = _connect(device);
+    _pendingConnect = attempt;
+    return attempt.whenComplete(() {
+      if (identical(_pendingConnect, attempt)) _pendingConnect = null;
+    });
+  }
+
+  Future<PrinterResult<void>> _connect(PrinterDevice device) async {
     try {
       if (!await _isPermissionGranted()) {
         return const PrinterErr(
@@ -151,6 +216,7 @@ class PrinterBackendEscpos implements PrinterBackend {
           PrinterFailure('Gagal terhubung ke printer.'),
         );
       }
+      _resetStatusSupport();
       return const PrinterOk(null);
     } catch (error) {
       _warn('Koneksi printer gagal', error);
@@ -160,6 +226,7 @@ class PrinterBackendEscpos implements PrinterBackend {
 
   @override
   Future<void> disconnect() async {
+    _resetStatusSupport();
     try {
       await _doDisconnect();
     } catch (error) {
@@ -182,7 +249,7 @@ class PrinterBackendEscpos implements PrinterBackend {
       return const PrinterErr(PrinterFailure('Printer belum terhubung.'));
     }
     try {
-      return PrinterOk(await _checkStatus());
+      return PrinterOk(await _queryStatus());
     } catch (error) {
       _warn('Query status printer gagal', error);
       return const PrinterOk(PrinterStatus.unknown);
@@ -190,30 +257,8 @@ class PrinterBackendEscpos implements PrinterBackend {
   }
 
   @override
-  Future<PrinterResult<void>> printReceipt(Receipt receipt) async {
-    if (_busy) {
-      return const PrinterErr(
-        PrinterFailure('Printer masih memproses pengiriman sebelumnya.'),
-      );
-    }
-    _busy = true;
-    final operation = _send(receipt);
-    // Kunci tetap dipegang hingga pekerjaan sebenarnya selesai, termasuk
-    // setelah timeout di bawah.
-    unawaited(
-      operation.then((_) {
-        _busy = false;
-      }),
-    );
-    return operation.timeout(
-      const Duration(seconds: 30),
-      onTimeout: () => const PrinterErr(
-        PrinterFailure(
-          'Pengiriman melewati batas waktu. Periksa kertas sebelum mencoba ulang.',
-        ),
-      ),
-    );
-  }
+  Future<PrinterResult<void>> printReceipt(Receipt receipt) =>
+      _gate.run(() => _send(receipt));
 
   Future<PrinterResult<void>> _send(Receipt receipt) async {
     try {
@@ -228,7 +273,7 @@ class PrinterBackendEscpos implements PrinterBackend {
       // sekali. Status `unknown` (banyak printer clone tidak mendukung
       // `DLE EOT`) sengaja TIDAK memblokir -- `hasKnownProblem` sudah
       // dirancang begitu.
-      final preStatus = await _checkStatus();
+      final preStatus = await _queryStatus();
       if (preStatus.hasKnownProblem) {
         return PrinterErr(PrinterFailure(preStatus.problemMessage!));
       }
@@ -244,7 +289,7 @@ class PrinterBackendEscpos implements PrinterBackend {
       // tanpa peduli printer sungguhan punya kertas/cover tertutup/dalam
       // kondisi error -- query status sekali lagi di sini supaya "byte
       // terkirim" tidak keliru dilaporkan sebagai "berhasil dicetak".
-      final status = await _checkStatus();
+      final status = await _queryStatus();
       if (status.hasKnownProblem) {
         // Bersihkan buffer printer dari data yang baru saja gagal tercetak
         // sekarang juga -- best-effort, jangan sampai gagal di sini malah

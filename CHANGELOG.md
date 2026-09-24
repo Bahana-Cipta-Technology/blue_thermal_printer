@@ -1,3 +1,19 @@
+## Unreleased (fork Bahana-Cipta-Technology) — audit September 2026
+Detail + checklist verifikasi hardware: `doc/audit-2026-09.md`.
+* Sunmi: kode `updatePrinterState()` dipetakan sesuai tabel AIDL resmi (kertas habis = 4, bukan 3) lewat `sunmiStateToStatus()`.
+* Sunmi: cetak memakai transaksi buffer + `exitPrinterBufferWithCallback`; hasil `printed`/`failed`/`unknown` dari `onPrintResult` (channel `printBitmap`/`enterBuffer`/`exitBuffer` diganti `printTransaction`). Struk di-feed 3 baris setelah bitmap.
+* Sunmi: binding lebih tahan (`onBindingDied`/`onNullBinding`), polling `connect()` ±3 dtk.
+* ESC/POS: thread baca tidak lagi mati saat tidak ada listener `onRead()`; koneksi mati dibersihkan otomatis sehingga reconnect setelah printer dimatikan-dinyalakan berhasil tanpa restart app.
+* ESC/POS: byte respons `DLE EOT` divalidasi (`PrinterStatus.tryFromOfflineStatusByte`), XON/XOFF tidak lagi terbaca sebagai status.
+* ESC/POS: semua write dipindah dari platform thread ke executor serial; `connect` paralel ditolak (`connect_in_progress`), `connect` ulang ke printer yang sama idempoten; `connect()` Dart single-flight.
+* API lama: header raster `GS v 0` (`printImage`/`printImageBytes`/`printQRcode`) benar untuk gambar ≥256 px; piksel transparan tercetak putih (`RasterImageEncoder`).
+* Baru: `PrintJobGate` (busy-lock + timeout + hard-timeout bersama semua backend); `ReceiptRenderer` menolak lebar bukan kelipatan 8.
+* Baru: `PrinterVendor.innerXcheng` / `PrinterBackendXcheng` -- sensor kertas + hasil cetak nyata lewat antarmuka native servis Xcheng (`vendor/xcheng/`), dengan fallback otomatis ke Sunmi saat connect gagal (`PrinterBackendFallback`).
+* Baru: `detectBuiltInPrinterVendor()` -- deteksi printer bawaan (Xcheng, lalu Sunmi) untuk default instalasi baru.
+* Sunmi: callback transaksi tidak ditunggu bila AIDL disediakan servis klon (menghapus jeda ±12 dtk cetak pertama di perangkat Xcheng).
+* ESC/POS: printer yang tidak pernah menjawab `DLE EOT` tidak ditanya lagi di sisa koneksi (menghapus ±3 dtk per cetak).
+* Test: suite kontrak lintas vendor, 162 test Dart + JUnit untuk helper Java murni; hasil device testing 01 di `doc/audit-2026-09.md`.
+
 ## 1.2.3
 * demonstrate using enum for readability
 * drawer pin by erica
