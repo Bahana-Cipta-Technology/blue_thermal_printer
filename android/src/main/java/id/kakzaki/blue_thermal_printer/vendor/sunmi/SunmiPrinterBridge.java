@@ -7,6 +7,7 @@ import android.content.ServiceConnection;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.IBinder;
+import android.os.Parcel;
 import android.os.RemoteException;
 import android.util.Log;
 
@@ -17,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 
 import woyou.aidlservice.jiuiv5.ICallback;
 import woyou.aidlservice.jiuiv5.IWoyouService;
+import woyou.aidlservice.jiuiv5.WoyouTransactions;
 
 /**
  * Jembatan ke servis printer bawaan Sunmi ("Woyou") lewat AIDL.
@@ -58,6 +60,10 @@ public class SunmiPrinterBridge {
   private final ExecutorService executor = Executors.newSingleThreadExecutor();
   private volatile IWoyouService woyouService;
 
+  /** {@code true} bila AIDL Woyou disediakan paket Sunmi asli, {@code false} bila klon (mis.
+   * {@code com.xcheng.printerservice}), {@code null} selama belum tersambung. */
+  private volatile Boolean genuineService;
+
   /** {@code null} = belum diketahui; {@code false} = jangan tunggu callback transaksi, langsung
    * commit polos. Diset {@code false} sejak awal bila AIDL Woyou disediakan servis klon (bukan
    * paket Sunmi asli -- mis. {@code com.xcheng.printerservice}, yang terbukti tidak pernah
@@ -79,12 +85,14 @@ public class SunmiPrinterBridge {
             + " (bukan Sunmi asli) -- callback transaksi tidak ditunggu");
       }
       transactionCallbackSupported = genuineSunmi ? null : Boolean.FALSE;
+      genuineService = genuineSunmi;
     }
 
     @Override
     public void onServiceDisconnected(ComponentName name) {
       // BIND_AUTO_CREATE menyambung ulang otomatis saat servis hidup lagi.
       woyouService = null;
+      genuineService = null;
     }
 
     @Override
@@ -100,6 +108,7 @@ public class SunmiPrinterBridge {
     public void onNullBinding(ComponentName name) {
       Log.w(TAG, "Servis printer Sunmi menolak binding (onBind mengembalikan null)");
       woyouService = null;
+      genuineService = null;
     }
   };
 
@@ -125,6 +134,7 @@ public class SunmiPrinterBridge {
       // Belum pernah/tidak lagi terbind -- aman diabaikan.
     } finally {
       woyouService = null;
+      genuineService = null;
     }
   }
 
@@ -138,6 +148,49 @@ public class SunmiPrinterBridge {
     } catch (RemoteException error) {
       Log.w(TAG, "Query status printer Sunmi gagal", error);
       return STATE_NOT_DETECTED;
+    }
+  }
+
+  /** Paket penyedia AIDL Sunmi asli? {@code null} selama belum tersambung. */
+  public Boolean isGenuineService() {
+    return genuineService;
+  }
+
+  /** {@code false} setelah callback transaksi terbukti tidak didukung (klon, atau pernah
+   * timeout); {@code null} selama belum diketahui. */
+  public Boolean isTransactionCallbackSupported() {
+    return transactionCallbackSupported;
+  }
+
+  /** Jenis kertas dari {@code getPrinterPaper()}: 0 = 80 mm, 1 = 58 mm (doc AIDL; T1 ≥ v2.4.0,
+   * T2/S2 ≥ v1.0.5, lainnya ≥ v4.1.2). {@code null} bila servis belum tersambung, firmware belum
+   * punya method ini, atau nilainya di luar 0/1. Dipanggil lewat transact langsung karena proxy
+   * hasil generate mengabaikan hasil {@code transact} -- lihat {@link WoyouTransactions}. */
+  public Integer printerPaper() {
+    IWoyouService service = woyouService;
+    if (service == null) return null;
+    IBinder binder = service.asBinder();
+    Parcel data = Parcel.obtain();
+    Parcel reply = Parcel.obtain();
+    try {
+      data.writeInterfaceToken(IWoyouService.DESCRIPTOR);
+      if (!binder.transact(WoyouTransactions.GET_PRINTER_PAPER, data, reply, 0)) {
+        Log.i(TAG, "getPrinterPaper tidak didukung firmware ini");
+        return null;
+      }
+      reply.readException();
+      int paper = reply.readInt();
+      if (paper != 0 && paper != 1) {
+        Log.i(TAG, "getPrinterPaper mengembalikan nilai tak dikenal: " + paper);
+        return null;
+      }
+      return paper;
+    } catch (RemoteException | RuntimeException error) {
+      Log.w(TAG, "Query jenis kertas Sunmi gagal", error);
+      return null;
+    } finally {
+      data.recycle();
+      reply.recycle();
     }
   }
 

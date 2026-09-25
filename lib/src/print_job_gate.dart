@@ -39,9 +39,9 @@ class PrintJobGate {
 
   bool get isBusy => _holder != null;
 
-  Future<PrinterResult<void>> run(Future<PrinterResult<void>> Function() job) {
+  Future<PrinterResult<T>> run<T>(Future<PrinterResult<T>> Function() job) {
     if (_holder != null) {
-      return Future.value(const PrinterErr(PrinterFailure(busyMessage)));
+      return Future.value(PrinterErr<T>(const PrinterFailure(busyMessage)));
     }
     final holder = Object();
     _holder = holder;
@@ -50,17 +50,17 @@ class PrintJobGate {
     }
 
     // Dibungkus `async` supaya tipe runtime-nya selalu
-    // Future<PrinterResult<void>> -- Future.sync(job) meneruskan Future milik
+    // Future<PrinterResult<T>> -- Future.sync(job) meneruskan Future milik
     // job apa adanya (mis. Future<Never> dari job yang langsung melempar),
     // dan `timeout(onTimeout:)` di bawah menolak callback bertipe lain.
-    Future<PrinterResult<void>> guarded() async => await job();
+    Future<PrinterResult<T>> guarded() async => await job();
     final operation = guarded();
     unawaited(operation.then((_) => release(), onError: (_) => release()));
     return operation.timeout(
       timeout,
       onTimeout: () {
         unawaited(_watchStuck(operation, holder));
-        return const PrinterErr(PrinterFailure(timeoutMessage));
+        return PrinterErr<T>(const PrinterFailure(timeoutMessage));
       },
     );
   }

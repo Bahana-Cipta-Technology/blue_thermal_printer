@@ -18,6 +18,8 @@ void main() {
     Duration stuckAfter = const Duration(seconds: 30),
   }) {
     var sends = 0;
+    var binds = 0;
+    List<int>? sent;
     Never fail() => throw Exception('channel error');
     final code = switch (status) {
       ContractStatus.normal => 1,
@@ -29,20 +31,33 @@ void main() {
         connectPollInterval: Duration.zero,
         printTimeout: printTimeout,
         stuckAfter: stuckAfter,
-        bind: () async => dependenciesThrow ? fail() : connected,
+        bind: () async {
+          if (dependenciesThrow) fail();
+          binds++;
+          return connected;
+        },
         unbind: () async => dependenciesThrow ? fail() : null,
         updateState: () async {
           if (dependenciesThrow) fail();
           return connected ? code : 505;
         },
-        printTransaction: (_, __) async {
+        serviceInfo: () async {
+          if (dependenciesThrow) fail();
+          return connected
+              ? const SunmiServiceInfo(paper: 1, genuine: true)
+              : const SunmiServiceInfo();
+        },
+        printTransaction: (png, __) async {
           if (dependenciesThrow) fail();
           sends++;
+          sent = png;
           await onSend?.call();
           return SunmiPrintOutcome.unknown;
         },
       ),
       sends: () => sends,
+      lastSentPng: () => sent,
+      connectAttempts: () => binds,
     );
   });
 

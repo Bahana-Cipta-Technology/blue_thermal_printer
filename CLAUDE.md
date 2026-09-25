@@ -19,6 +19,20 @@ Repo ini dipakai app `parkways_valet` (Flutter) lewat **git submodule + `path:` 
 - `PrinterResult`/`PrinterOk`/`PrinterErr`/`PrinterFailure` (`lib/src/result.dart`) — tipe hasil operasi milik plugin ini sendiri, terpisah dari `Result`/`Failure` app konsumen mana pun (plugin generik lintas app, tidak boleh tahu taksonomi galat satu app tertentu).
 - `PrinterVendor` + `createPrinterBackend` (`lib/src/printer_vendor.dart`) — *source of truth* vendor mana saja yang plugin ini dukung, plus factory yang membangun instance `PrinterBackend` konkretnya. Ini yang dipakai app konsumen untuk memilih backend (bukan mendefinisikan enum vendor sendiri) — lihat bagian "Menambah vendor baru" di bawah.
 
+**Perluasan kontrak (sudah diimplementasikan, terverifikasi di device testing 01):** `doc/contract-extensions-design.md`. Isinya:
+- `printReceipt` → `PrintDelivery` (`confirmed`/`unverified`);
+- `capabilities()`;
+- `preview(Receipt)`;
+- `ensureConnected({lastDevice})`.
+
+Dokumen itu juga memuat audit sumber resmi tiap vendor. Beberapa hal yang perlu diingat:
+- `getPrinterPaper()` Sunmi mengembalikan 0 = 80 mm dan 1 = 58 mm, dan hanya dipercaya dari paket Sunmi asli.
+- Method itu dipanggil lewat raw transact (`WoyouTransactions`), karena proxy AIDL bawaan mengabaikan hasil `transact`: firmware tanpa method itu, termasuk klon Xcheng yang terverifikasi di O1, akan terbaca 0 = 80 mm.
+- `preview` dan `printReceipt` wajib memakai renderer yang sama (`_rendererFor`/`_printRenderer`).
+- `confirmed` hanya boleh muncul bila `capabilities().confirmsPrint == true`. Invariant ini dijaga oleh suite kontrak.
+
+Vendor baru wajib mengisi keempat member ini.
+
 **Status saat ini: kontrak + empat implementasi (ESC/POS, Sunmi, Xcheng, iMin), dipakai app konsumen.** iMin belum diverifikasi di hardware. Pemilihan printer bawaan: `detectBuiltInPrinterVendor()` (`lib/src/printer_vendor.dart`) mengecek **Xcheng, lalu iMin, lalu Sunmi**. Servis Xcheng juga menyediakan AIDL kompatibel Sunmi, jadi urutan terbalik salah mengenali perangkat Xcheng; iMin ikut dicek sebelum Sunmi dengan alasan yang sama. Fungsi ini mengembalikan `null` bila tidak ada printer bawaan. App konsumen memakainya sekali di boot dan hanya untuk default instalasi baru / belum pernah memilih -- pilihan tersimpan tidak pernah diganti otomatis.
 - `PrintJobGate` (`lib/src/print_job_gate.dart`) — busy-lock + timeout 30 dtk bersama untuk `printReceipt` semua backend: pekerjaan kedua ditolak selama yang pertama berjalan, timeout Dart tidak melepas kunci sebelum pekerjaan native selesai, dan pekerjaan yang masih macet 30 dtk setelah timeout memanggil `onStuck` lalu kunci dilepas paksa. Vendor baru wajib memakainya, jangan menulis busy-flag sendiri.
 - `PrinterBackendEscpos` (`lib/src/printer_backend_escpos.dart`) — membungkus `BlueThermalPrinter` (API lama) untuk printer Bluetooth generik lewat ESC/POS. `_send()` melakukan pre-check status sebelum menulis, lalu post-check setelah menulis (`checkStatus()`, ESC/POS `DLE EOT 2`, byte divalidasi lewat `PrinterStatus.tryFromOfflineStatusByte`) -- kalau post-check melaporkan masalah, tulis satu reset buffer tambahan (`ESC @`, byte `[27, 64]`) sebagai best-effort sebelum melaporkan galat ke pemanggil. `connect()` single-flight (panggilan bersamaan berbagi satu percobaan native); `onStuck` gate = `disconnect()` supaya write native yang macet terlepas. Printer yang tidak pernah menjawab query status (2 query beruntun tanpa jawaban sejak terhubung, mis. `RPPInnerPrinter`) tidak ditanya lagi sampai `connect()`/`disconnect()` berikutnya -- tanpa ini tiap cetak membayar 2× timeout native (±3 dtk).

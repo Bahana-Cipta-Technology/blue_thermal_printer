@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:blue_thermal_printer/printer_backend.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,13 +10,29 @@ enum ContractStatus { normal, unknown, paperOut }
 /// Satu backend yang sudah dirangkai dengan fake, plus pengamat efek
 /// sampingnya -- dibangun oleh factory milik tiap vendor.
 class ContractHarness {
-  ContractHarness({required this.backend, required this.sends});
+  ContractHarness({
+    required this.backend,
+    required this.sends,
+    this.lastSentPng,
+    this.connectAttempts,
+  });
 
   final PrinterBackend backend;
 
   /// Berapa kali data cetak benar-benar dikirim ke native.
   final int Function() sends;
+
+  /// PNG terakhir yang dikirim ke native (backend printer bawaan); `null`
+  /// untuk backend yang mengirim raster ESC/POS.
+  final List<int>? Function()? lastSentPng;
+
+  /// Berapa kali percobaan koneksi native (bind/connect) dimulai.
+  final int Function()? connectAttempts;
 }
+
+/// Lebar PNG dari chunk IHDR (big-endian, byte 16..19).
+int pngWidth(Uint8List png) =>
+    png[16] << 24 | png[17] << 16 | png[18] << 8 | png[19];
 
 typedef ContractHarnessFactory =
     ContractHarness Function({
@@ -74,6 +91,73 @@ void runPrinterBackendContract(
       expect((await harness.backend.printReceipt(receipt)).isOk, isTrue);
     });
 
+    test('confirmed hanya bila capabilities().confirmsPrint true', () async {
+      final harness = build(connected: true);
+
+      final delivery = (await harness.backend.printReceipt(receipt)).valueOrNull;
+      final caps = await harness.backend.capabilities();
+
+      expect(delivery, isNotNull);
+      if (delivery == PrintDelivery.confirmed) {
+        expect(caps.confirmsPrint, isTrue);
+      }
+    });
+
+    test('preview selebar capabilities() dan identik dengan yang dicetak',
+        () async {
+      final harness = build(connected: true);
+      final backend = harness.backend;
+
+      final caps = await backend.capabilities();
+      final preview = await backend.preview(receipt);
+      expect(pngWidth(preview), caps.paperWidthPx);
+
+      await backend.printReceipt(receipt);
+      final sent = harness.lastSentPng?.call();
+      if (sent != null) expect(sent, preview);
+    });
+
+    test('capabilities() dan preview() tidak mengirim data dan tidak melempar',
+        () async {
+      for (final throwing in [false, true]) {
+        final harness = build(connected: true, dependenciesThrow: throwing);
+
+        final caps = await harness.backend.capabilities();
+        await harness.backend.preview(receipt);
+
+        expect(caps.paperWidthPx % 8, 0);
+        expect(harness.sends(), 0);
+      }
+    });
+
+    test('ensureConnected saat terhubung idempoten', () async {
+      final harness = build(connected: true);
+      final backend = harness.backend;
+      final last = (await backend.discoverDevices()).firstOrNull;
+
+      final first = await backend.ensureConnected(lastDevice: last);
+      final second = await backend.ensureConnected(lastDevice: last);
+
+      expect(first.isOk, isTrue);
+      expect(second.isOk, isTrue);
+      expect(second.valueOrNull, first.valueOrNull);
+    });
+
+    test('ensureConnected bersamaan berbagi satu percobaan native', () async {
+      final harness = build(connected: false);
+      final backend = harness.backend;
+      final last = (await backend.discoverDevices()).firstOrNull;
+
+      final results = await Future.wait([
+        backend.ensureConnected(lastDevice: last),
+        backend.ensureConnected(lastDevice: last),
+      ]);
+
+      expect(results[0].isOk, results[1].isOk);
+      final attempts = harness.connectAttempts;
+      if (attempts != null) expect(attempts(), 1);
+    });
+
     test('cetak bersamaan ditolak, lalu bisa mencetak lagi', () async {
       final gate = Completer<void>();
       final harness = build(connected: true, onSend: () => gate.future);
@@ -117,6 +201,12 @@ void runPrinterBackendContract(
       );
       await backend.disconnect();
       await backend.openSystemSettings();
+      expect(
+        (await backend.ensureConnected(
+          lastDevice: const PrinterDevice(name: 'X', macAddress: 'x'),
+        )).isErr,
+        isTrue,
+      );
       expect((await backend.checkStatus()).isErr, isTrue);
       expect((await backend.printReceipt(receipt)).isErr, isTrue);
     });

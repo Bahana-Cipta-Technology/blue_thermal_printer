@@ -1,7 +1,9 @@
 import 'package:flutter/services.dart';
 
+import 'built_in_connection.dart';
 import 'print_job_gate.dart';
 import 'printer_backend.dart';
+import 'printer_capabilities.dart';
 import 'printer_device.dart';
 import 'printer_status.dart';
 import 'receipt.dart';
@@ -39,6 +41,50 @@ PrinterStatus sunmiStateToStatus(int code) => switch (code) {
   5 || 7 || 507 => const PrinterStatus(hasError: true),
   _ => PrinterStatus.unknown,
 };
+
+/// Info servis Woyou yang tidak memerlukan query ke printer fisik (channel
+/// `serviceInfo`, `SunmiPrinterBridge`).
+class SunmiServiceInfo {
+  const SunmiServiceInfo({this.paper, this.genuine, this.transactionCallback});
+
+  /// `getPrinterPaper()`: 0 = 80 mm, 1 = 58 mm; `null` bila tidak diketahui.
+  final int? paper;
+
+  /// AIDL disediakan paket Sunmi asli (`true`) atau klon (`false`); `null`
+  /// selama servis belum tersambung.
+  final bool? genuine;
+
+  /// `false` setelah callback transaksi terbukti tidak didukung; `null`
+  /// selama belum diketahui.
+  final bool? transactionCallback;
+
+  static SunmiServiceInfo fromMap(Object? raw) {
+    if (raw is! Map) return const SunmiServiceInfo();
+    return SunmiServiceInfo(
+      paper: raw['paper'] as int?,
+      genuine: raw['genuine'] as bool?,
+      transactionCallback: raw['transactionCallback'] as bool?,
+    );
+  }
+}
+
+/// Terjemahkan [SunmiServiceInfo] jadi [PrinterCapabilities], atau `null`
+/// bila servis belum tersambung (belum ada yang bisa disimpulkan).
+///
+/// Lebar 80 mm hanya dipercaya dari paket Sunmi asli: servis klon (mis.
+/// Xcheng) terbukti melaporkan status yang tidak akurat, dan perangkatnya
+/// handheld 58 mm. Konfirmasi cetak (`onPrintResult`) juga hanya dari paket
+/// asli yang callback transaksinya belum pernah gagal datang.
+PrinterCapabilities? sunmiCapabilities(SunmiServiceInfo info) {
+  final genuine = info.genuine;
+  if (genuine == null) return null;
+  return PrinterCapabilities(
+    paperWidthPx: genuine && info.paper == 0 ? 576 : 384,
+    autoCut: false,
+    reportsPaperOut: genuine,
+    confirmsPrint: genuine && info.transactionCallback != false,
+  );
+}
 
 /// Hasil satu transaksi cetak Sunmi (`exitPrinterBufferWithCallback` →
 /// `onPrintResult`).
@@ -78,6 +124,7 @@ class PrinterBackendSunmi implements PrinterBackend {
     Future<int> Function()? updateState,
     Future<SunmiPrintOutcome> Function(List<int> png, int feedLines)?
     printTransaction,
+    Future<SunmiServiceInfo> Function()? serviceInfo,
     Duration connectPollInterval = const Duration(milliseconds: 200),
     Duration printTimeout = const Duration(seconds: 30),
     Duration stuckAfter = const Duration(seconds: 30),
@@ -91,6 +138,11 @@ class PrinterBackendSunmi implements PrinterBackend {
            (() async =>
                await _channel.invokeMethod<int>('updateState') ??
                _stateNotDetected),
+       _serviceInfo =
+           serviceInfo ??
+           (() async => SunmiServiceInfo.fromMap(
+             await _channel.invokeMethod<Object?>('serviceInfo'),
+           )),
        _printTransaction =
            printTransaction ??
            ((png, feedLines) async => SunmiPrintOutcome.parse(
@@ -123,6 +175,15 @@ class PrinterBackendSunmi implements PrinterBackend {
   /// API diterima, BUKAN struk tercetak.
   final Future<SunmiPrintOutcome> Function(List<int> png, int feedLines)
   _printTransaction;
+  final Future<SunmiServiceInfo> Function() _serviceInfo;
+  final _ensureFlight = SingleFlight<PrinterResult<PrinterDevice>>();
+
+  /// Kemampuan terakhir yang diketahui saat servis tersambung -- dipakai
+  /// [capabilities]/[preview] sebelum/tanpa koneksi.
+  PrinterCapabilities _lastCapabilities = PrinterCapabilities.fallback58;
+
+  ReceiptRenderer _rendererFor(PrinterCapabilities caps) =>
+      ReceiptRenderer(width: caps.paperWidthPx, fontFamily: _renderer.fontFamily);
 
   @override
   String get displayName => 'Printer Bawaan Sunmi';
@@ -174,6 +235,28 @@ class PrinterBackendSunmi implements PrinterBackend {
   }
 
   @override
+  Future<PrinterResult<PrinterDevice>> ensureConnected({
+    PrinterDevice? lastDevice,
+  }) => _ensureFlight.run(
+    () => ensureBuiltInConnected(this, kSunmiBuiltInDevice),
+  );
+
+  @override
+  Future<PrinterCapabilities> capabilities() async {
+    try {
+      final caps = sunmiCapabilities(await _serviceInfo());
+      if (caps != null) _lastCapabilities = caps;
+    } catch (_) {
+      // Channel tidak ada (mis. desktop) -- pakai nilai terakhir.
+    }
+    return _lastCapabilities;
+  }
+
+  @override
+  Future<Uint8List> preview(Receipt receipt) async =>
+      _rendererFor(await capabilities()).preview(receipt);
+
+  @override
   Future<void> disconnect() async {
     try {
       await _unbind();
@@ -201,10 +284,10 @@ class PrinterBackendSunmi implements PrinterBackend {
   }
 
   @override
-  Future<PrinterResult<void>> printReceipt(Receipt receipt) =>
+  Future<PrinterResult<PrintDelivery>> printReceipt(Receipt receipt) =>
       _gate.run(() => _send(receipt));
 
-  Future<PrinterResult<void>> _send(Receipt receipt) async {
+  Future<PrinterResult<PrintDelivery>> _send(Receipt receipt) async {
     try {
       if (!await isConnected()) {
         return const PrinterErr(
@@ -218,11 +301,18 @@ class PrinterBackendSunmi implements PrinterBackend {
       if (preStatus.hasKnownProblem) {
         return PrinterErr(PrinterFailure(preStatus.problemMessage!));
       }
-      final bytes = await _renderer.preview(receipt);
+      final caps = await capabilities();
+      final bytes = await _rendererFor(caps).preview(receipt);
       final outcome = await _printTransaction(bytes, feedLines);
       switch (outcome) {
         case SunmiPrintOutcome.printed:
-          return const PrinterOk(null);
+          // `printed` hanya datang dari callback transaksi paket asli; tetap
+          // dijaga supaya `confirmed` tidak pernah melampaui capabilities.
+          return PrinterOk(
+            caps.confirmsPrint == true
+                ? PrintDelivery.confirmed
+                : PrintDelivery.unverified,
+          );
         case SunmiPrintOutcome.failed:
           // Printer sudah pasti gagal -- query status hanya untuk memberi
           // pesan yang lebih spesifik bila penyebabnya diketahui.
@@ -240,7 +330,7 @@ class PrinterBackendSunmi implements PrinterBackend {
           if (status.hasKnownProblem) {
             return PrinterErr(PrinterFailure(status.problemMessage!));
           }
-          return const PrinterOk(null);
+          return const PrinterOk(PrintDelivery.unverified);
       }
     } catch (_) {
       return const PrinterErr(

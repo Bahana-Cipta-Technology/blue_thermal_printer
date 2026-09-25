@@ -6,6 +6,9 @@ import android.os.Looper;
 
 import androidx.annotation.NonNull;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
@@ -46,6 +49,14 @@ public class SunmiPrinterChannel implements MethodCallHandler {
 
       case "updateState":
         result.success(bridge.updatePrinterState());
+        break;
+
+      case "serviceInfo":
+        Map<String, Object> info = new HashMap<>();
+        info.put("paper", bridge.printerPaper());
+        info.put("genuine", bridge.isGenuineService());
+        info.put("transactionCallback", bridge.isTransactionCallbackSupported());
+        result.success(info);
         break;
 
       case "printTransaction":

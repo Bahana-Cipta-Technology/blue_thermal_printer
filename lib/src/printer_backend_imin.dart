@@ -1,7 +1,9 @@
 import 'package:flutter/services.dart';
 
+import 'built_in_connection.dart';
 import 'print_job_gate.dart';
 import 'printer_backend.dart';
+import 'printer_capabilities.dart';
 import 'printer_device.dart';
 import 'printer_status.dart';
 import 'receipt.dart';
@@ -77,6 +79,7 @@ class PrinterBackendImin implements PrinterBackend {
     Future<int?> Function()? paperType,
     Future<IminPrintOutcome> Function(List<int> png, int feedDistance, bool cut)?
     printTransaction,
+    Future<bool> Function()? printResultVerified,
     Duration connectPollInterval = const Duration(milliseconds: 200),
     Duration printTimeout = const Duration(seconds: 30),
     Duration stuckAfter = const Duration(seconds: 30),
@@ -90,6 +93,10 @@ class PrinterBackendImin implements PrinterBackend {
            (() async =>
                await _channel.invokeMethod<int>('status') ?? _statusNotReady),
        _paperType = paperType ?? (() => _channel.invokeMethod<int>('paperType')),
+       _printResultVerified =
+           printResultVerified ??
+           (() async =>
+               await _channel.invokeMethod<bool>('printResultVerified') ?? false),
        _printTransaction =
            printTransaction ??
            ((png, feedDistance, cut) async => IminPrintOutcome.parse(
@@ -128,6 +135,18 @@ class PrinterBackendImin implements PrinterBackend {
   /// (cut) → `exitPrinterBufferWithCallback`.
   final Future<IminPrintOutcome> Function(List<int> png, int feedDistance, bool cut)
   _printTransaction;
+
+  /// `IminPrinterBridge.PRINT_RESULT_CODE_VERIFIED`: kode `onPrintResult`
+  /// sudah diverifikasi di hardware, jadi `printed` bisa dipercaya.
+  final Future<bool> Function() _printResultVerified;
+  final _ensureFlight = SingleFlight<PrinterResult<PrinterDevice>>();
+
+  /// Kemampuan terakhir yang diketahui saat terhubung -- dipakai
+  /// [capabilities]/[preview] sebelum/tanpa koneksi.
+  PrinterCapabilities _lastCapabilities = PrinterCapabilities.fallback58;
+
+  ReceiptRenderer _rendererFor(PrinterCapabilities caps) =>
+      ReceiptRenderer(width: caps.paperWidthPx, fontFamily: _renderer.fontFamily);
 
   @override
   String get displayName => 'Printer Bawaan iMin';
@@ -172,6 +191,41 @@ class PrinterBackendImin implements PrinterBackend {
   }
 
   @override
+  Future<PrinterResult<PrinterDevice>> ensureConnected({
+    PrinterDevice? lastDevice,
+  }) => _ensureFlight.run(
+    () => ensureBuiltInConnected(this, kIminBuiltInDevice),
+  );
+
+  @override
+  Future<PrinterCapabilities> capabilities() async {
+    if (!await isAvailable()) return _lastCapabilities;
+    return _connectedCapabilities();
+  }
+
+  /// Kemampuan saat servis sudah siap: lebar dari `getPrinterPaperType`
+  /// (dibaca ulang tiap kali -- printer 80 mm bisa memakai gulungan 58 mm).
+  Future<PrinterCapabilities> _connectedCapabilities() async {
+    final wide = await _paperTypeOrNull() == 80;
+    bool verified;
+    try {
+      verified = await _printResultVerified();
+    } catch (_) {
+      verified = false;
+    }
+    return _lastCapabilities = PrinterCapabilities(
+      paperWidthPx: wide ? paper80WidthPx : paper58WidthPx,
+      autoCut: wide,
+      reportsPaperOut: true,
+      confirmsPrint: verified,
+    );
+  }
+
+  @override
+  Future<Uint8List> preview(Receipt receipt) async =>
+      _rendererFor(await capabilities()).preview(receipt);
+
+  @override
   Future<void> disconnect() async {
     try {
       await _unbind();
@@ -210,10 +264,10 @@ class PrinterBackendImin implements PrinterBackend {
   }
 
   @override
-  Future<PrinterResult<void>> printReceipt(Receipt receipt) =>
+  Future<PrinterResult<PrintDelivery>> printReceipt(Receipt receipt) =>
       _gate.run(() => _send(receipt));
 
-  Future<PrinterResult<void>> _send(Receipt receipt) async {
+  Future<PrinterResult<PrintDelivery>> _send(Receipt receipt) async {
     try {
       if (!await isConnected()) {
         return const PrinterErr(
@@ -226,15 +280,15 @@ class PrinterBackendImin implements PrinterBackend {
       if (preStatus.hasKnownProblem) {
         return PrinterErr(PrinterFailure(preStatus.problemMessage!));
       }
-      final wide = await _paperTypeOrNull() == 80;
-      final renderer = ReceiptRenderer(
-        width: wide ? paper80WidthPx : paper58WidthPx,
-        fontFamily: _renderer.fontFamily,
-      );
-      final bytes = await renderer.preview(receipt);
-      switch (await _printTransaction(bytes, feedDistance, wide)) {
+      final caps = await _connectedCapabilities();
+      final bytes = await _rendererFor(caps).preview(receipt);
+      switch (await _printTransaction(bytes, feedDistance, caps.autoCut)) {
         case IminPrintOutcome.printed:
-          return const PrinterOk(null);
+          return PrinterOk(
+            caps.confirmsPrint == true
+                ? PrintDelivery.confirmed
+                : PrintDelivery.unverified,
+          );
         case IminPrintOutcome.failed:
           // Printer sudah pasti gagal -- query status hanya untuk memberi
           // pesan yang lebih spesifik bila penyebabnya diketahui.
@@ -250,7 +304,7 @@ class PrinterBackendImin implements PrinterBackend {
           if (status.hasKnownProblem) {
             return PrinterErr(PrinterFailure(status.problemMessage!));
           }
-          return const PrinterOk(null);
+          return const PrinterOk(PrintDelivery.unverified);
       }
     } catch (_) {
       return const PrinterErr(

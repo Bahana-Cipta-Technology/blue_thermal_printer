@@ -4,7 +4,9 @@ import 'dart:typed_data';
 import 'package:app_settings/app_settings.dart';
 
 import '../blue_thermal_printer.dart';
+import 'built_in_connection.dart';
 import 'printer_backend.dart';
+import 'printer_capabilities.dart';
 import 'printer_device.dart';
 import 'print_job_gate.dart';
 import 'printer_status.dart';
@@ -37,7 +39,8 @@ class PrinterBackendEscpos implements PrinterBackend {
     Future<void> Function()? openSettings,
     Duration printTimeout = const Duration(seconds: 30),
     Duration stuckAfter = const Duration(seconds: 30),
-  }) : _isBluetoothOn =
+  }) : _renderer = renderer,
+       _isBluetoothOn =
            isBluetoothOn ??
            (() async => await BlueThermalPrinter.instance.isOn ?? false),
        _isPermissionGranted =
@@ -104,6 +107,7 @@ class PrinterBackendEscpos implements PrinterBackend {
     );
   }
 
+  final ReceiptRenderer _renderer;
   final Future<bool> Function() _isBluetoothOn;
   final Future<bool> Function() _isPermissionGranted;
   final Future<List<PrinterDevice>> Function() _discover;
@@ -136,6 +140,13 @@ class PrinterBackendEscpos implements PrinterBackend {
     _unansweredStatusQueries = 0;
     _statusEverAnswered = false;
   }
+
+  /// Alamat perangkat dari [connect] terakhir yang berhasil -- dukungan
+  /// query status yang sudah dipelajari tetap berlaku saat menyambung ulang
+  /// ke printer yang SAMA (mis. [ensureConnected] sebelum tiap cetak).
+  String? _connectedAddress;
+
+  final _ensureFlight = SingleFlight<PrinterResult<PrinterDevice>>();
 
   /// Query status lewat [_checkStatus], sambil belajar apakah printer ini
   /// mendukungnya. Jawaban `DLE EOT` yang sah selalu mengisi ketiga field;
@@ -216,7 +227,8 @@ class PrinterBackendEscpos implements PrinterBackend {
           PrinterFailure('Gagal terhubung ke printer.'),
         );
       }
-      _resetStatusSupport();
+      if (_connectedAddress != device.macAddress) _resetStatusSupport();
+      _connectedAddress = device.macAddress;
       return const PrinterOk(null);
     } catch (error) {
       _warn('Koneksi printer gagal', error);
@@ -224,9 +236,81 @@ class PrinterBackendEscpos implements PrinterBackend {
     }
   }
 
+  /// Sambung ke [lastDevice] tanpa interaksi pengguna. Native `connect` ke
+  /// alamat yang sama selagi koneksi hidup langsung sukses tanpa menulis ke
+  /// printer, jadi [isConnected] (yang menulis byte) tidak pernah dipakai.
+  @override
+  Future<PrinterResult<PrinterDevice>> ensureConnected({
+    PrinterDevice? lastDevice,
+  }) => _ensureFlight.run(() => _ensureConnected(lastDevice));
+
+  Future<PrinterResult<PrinterDevice>> _ensureConnected(
+    PrinterDevice? lastDevice,
+  ) async {
+    try {
+      if (!await _isPermissionGranted()) {
+        return const PrinterErr(
+          PrinterFailure(
+            'Izin Bluetooth ditolak. Berikan izin lewat Setelan.',
+            isPermissionDenied: true,
+          ),
+        );
+      }
+      if (!await _isBluetoothOn()) {
+        return const PrinterErr(PrinterFailure('Bluetooth belum aktif.'));
+      }
+      if (lastDevice == null) {
+        return const PrinterErr(
+          PrinterFailure(
+            'Pilih printer terlebih dahulu.',
+            requiresDeviceSelection: true,
+          ),
+        );
+      }
+      PrinterDevice? bonded;
+      for (final device in await _discover()) {
+        if (device.macAddress == lastDevice.macAddress) {
+          bonded = device;
+          break;
+        }
+      }
+      if (bonded == null) {
+        return const PrinterErr(
+          PrinterFailure(
+            'Printer terakhir tidak lagi dipasangkan. Pilih printer lagi.',
+            requiresDeviceSelection: true,
+          ),
+        );
+      }
+      final device = bonded;
+      return (await connect(device)).map((_) => device);
+    } catch (error) {
+      _warn('Sambung otomatis printer gagal', error);
+      return const PrinterErr(PrinterFailure('Gagal terhubung ke printer.'));
+    }
+  }
+
+  @override
+  Future<PrinterCapabilities> capabilities() async => PrinterCapabilities(
+    paperWidthPx: _renderer.width,
+    autoCut: false,
+    reportsPaperOut: _statusEverAnswered
+        ? true
+        : _statusUnsupported
+        ? false
+        : null,
+    // ESC/POS tidak mengonfirmasi struk tercetak (`DLE EOT` dijawab saat
+    // byte diterima). Konfirmasi lewat process ID `GS ( H` fn=48 = fase 4.
+    confirmsPrint: false,
+  );
+
+  @override
+  Future<Uint8List> preview(Receipt receipt) => _renderer.preview(receipt);
+
   @override
   Future<void> disconnect() async {
     _resetStatusSupport();
+    _connectedAddress = null;
     try {
       await _doDisconnect();
     } catch (error) {
@@ -257,10 +341,10 @@ class PrinterBackendEscpos implements PrinterBackend {
   }
 
   @override
-  Future<PrinterResult<void>> printReceipt(Receipt receipt) =>
+  Future<PrinterResult<PrintDelivery>> printReceipt(Receipt receipt) =>
       _gate.run(() => _send(receipt));
 
-  Future<PrinterResult<void>> _send(Receipt receipt) async {
+  Future<PrinterResult<PrintDelivery>> _send(Receipt receipt) async {
     try {
       if (!await _connected()) {
         return const PrinterErr(
@@ -303,7 +387,7 @@ class PrinterBackendEscpos implements PrinterBackend {
         }
         return PrinterErr(PrinterFailure(status.problemMessage!));
       }
-      return const PrinterOk(null);
+      return const PrinterOk(PrintDelivery.unverified);
     } catch (_) {
       return const PrinterErr(
         PrinterFailure(

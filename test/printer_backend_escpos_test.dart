@@ -18,6 +18,7 @@ void main() {
     Duration stuckAfter = const Duration(seconds: 30),
   }) {
     var sends = 0;
+    var connects = 0;
     Never fail() => throw Exception('channel error');
     final printerStatus = switch (status) {
       ContractStatus.normal => const PrinterStatus(
@@ -35,7 +36,11 @@ void main() {
         isBluetoothOn: () async => dependenciesThrow ? fail() : true,
         isPermissionGranted: () async => dependenciesThrow ? fail() : true,
         discover: () async => dependenciesThrow ? fail() : const [device],
-        doConnect: (_) async => dependenciesThrow ? fail() : true,
+        doConnect: (_) async {
+          if (dependenciesThrow) fail();
+          connects++;
+          return true;
+        },
         doDisconnect: () async => dependenciesThrow ? fail() : null,
         connected: () async => dependenciesThrow ? fail() : connected,
         encode: (_) async => [1],
@@ -49,6 +54,7 @@ void main() {
         openSettings: () async => dependenciesThrow ? fail() : null,
       ),
       sends: () => sends,
+      connectAttempts: () => connects,
     );
   });
 

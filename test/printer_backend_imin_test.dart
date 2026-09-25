@@ -15,6 +15,8 @@ void main() {
     Duration stuckAfter = const Duration(seconds: 30),
   }) {
     var sends = 0;
+    var binds = 0;
+    List<int>? sent;
     Never fail() => throw Exception('channel error');
     final code = switch (status) {
       ContractStatus.normal => 0,
@@ -26,21 +28,29 @@ void main() {
         connectPollInterval: Duration.zero,
         printTimeout: printTimeout,
         stuckAfter: stuckAfter,
-        bind: () async => dependenciesThrow ? fail() : connected,
+        bind: () async {
+          if (dependenciesThrow) fail();
+          binds++;
+          return connected;
+        },
         unbind: () async => dependenciesThrow ? fail() : null,
         status: () async {
           if (dependenciesThrow) fail();
           return connected ? code : -1;
         },
         paperType: () async => dependenciesThrow ? fail() : 58,
-        printTransaction: (_, __, ___) async {
+        printResultVerified: () async => dependenciesThrow ? fail() : false,
+        printTransaction: (png, __, ___) async {
           if (dependenciesThrow) fail();
           sends++;
+          sent = png;
           await onSend?.call();
           return IminPrintOutcome.unknown;
         },
       ),
       sends: () => sends,
+      lastSentPng: () => sent,
+      connectAttempts: () => binds,
     );
   });
 

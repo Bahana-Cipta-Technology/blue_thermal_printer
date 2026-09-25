@@ -6,7 +6,11 @@
 /// App konsumen bebas memetakan [PrinterFailure] ke tipe galat miliknya
 /// sendiri di titik pemanggilan (mis. jadi `DeviceFailure`).
 class PrinterFailure {
-  const PrinterFailure(this.message, {this.isPermissionDenied = false});
+  const PrinterFailure(
+    this.message, {
+    this.isPermissionDenied = false,
+    this.requiresDeviceSelection = false,
+  });
 
   final String message;
 
@@ -14,6 +18,11 @@ class PrinterFailure {
   /// izin Bluetooth) -- UI app bisa menampilkan ajakan buka Setelan alih-alih
   /// pesan galat generik.
   final bool isPermissionDenied;
+
+  /// `true` bila tidak ada perangkat yang bisa disambungkan otomatis (mis.
+  /// `ensureConnected` Bluetooth tanpa perangkat terakhir, atau perangkat itu
+  /// tidak lagi terpasang) -- UI app sebaiknya membuka layar pilih printer.
+  final bool requiresDeviceSelection;
 
   @override
   String toString() => 'PrinterFailure($message)';

@@ -50,6 +50,10 @@ public class IminPrinterChannel implements MethodCallHandler {
         result.success(bridge.paperType());
         break;
 
+      case "printResultVerified":
+        result.success(IminPrinterBridge.PRINT_RESULT_CODE_VERIFIED);
+        break;
+
       case "printTransaction":
         byte[] bytes = call.argument("bytes");
         Integer feedDistance = call.argument("feedDistance");

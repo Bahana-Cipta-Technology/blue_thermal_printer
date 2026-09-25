@@ -1,3 +1,6 @@
+import 'dart:typed_data';
+
+import 'printer_capabilities.dart';
 import 'printer_device.dart';
 import 'printer_status.dart';
 import 'receipt.dart';
@@ -59,9 +62,36 @@ abstract interface class PrinterBackend {
   /// berisi [PrinterStatus.unknown].
   Future<PrinterResult<PrinterStatus>> checkStatus();
 
-  /// Cetak struk. Mengembalikan kegagalan bila printer menolak atau belum
-  /// terhubung.
-  Future<PrinterResult<void>> printReceipt(Receipt receipt);
+  /// Siapkan printer untuk mencetak tanpa interaksi pengguna, lalu
+  /// kembalikan perangkat yang terhubung.
+  ///
+  /// Printer bawaan: bind/connect satu-satunya perangkat ([lastDevice]
+  /// diabaikan). Bluetooth: sambung ke [lastDevice] bila izin ada, radio
+  /// aktif, dan perangkat itu masih terpasang -- tanpa [lastDevice] atau bila
+  /// sudah tidak terpasang, [PrinterFailure.requiresDeviceSelection] `true`.
+  /// Tidak pernah memicu dialog izin dan tidak memakai [isConnected] (yang
+  /// boleh menulis ke printer). Aman dipanggil berulang: idempoten, dan
+  /// panggilan bersamaan berbagi satu percobaan native.
+  Future<PrinterResult<PrinterDevice>> ensureConnected({
+    PrinterDevice? lastDevice,
+  });
+
+  /// Kemampuan backend saat ini (lebar kertas, pemotong, keandalan deteksi
+  /// kertas & konfirmasi cetak). Tidak pernah menulis ke printer dan tidak
+  /// pernah melempar -- sebelum terhubung mengembalikan nilai terakhir yang
+  /// diketahui atau [PrinterCapabilities.fallback58].
+  Future<PrinterCapabilities> capabilities();
+
+  /// Gambar PNG struk yang identik dengan yang akan dicetak [printReceipt]
+  /// (renderer dan lebar [PrinterCapabilities.paperWidthPx] yang sama).
+  /// Tidak mengirim apa pun ke printer, bisa dipakai saat belum terhubung.
+  Future<Uint8List> preview(Receipt receipt);
+
+  /// Cetak struk. [PrintDelivery.confirmed] hanya bila printer melaporkan
+  /// struk selesai tercetak; [PrintDelivery.unverified] bila data terkirim
+  /// tanpa bukti gagal. Mengembalikan kegagalan bila printer menolak atau
+  /// belum terhubung.
+  Future<PrinterResult<PrintDelivery>> printReceipt(Receipt receipt);
 
   /// Buka layar pengaturan sistem yang relevan untuk transport ini (mis.
   /// Setelan Bluetooth). No-op pada backend tanpa pengaturan sistem yang

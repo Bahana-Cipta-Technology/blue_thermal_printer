@@ -15,6 +15,8 @@ void main() {
     Duration stuckAfter = const Duration(seconds: 30),
   }) {
     var sends = 0;
+    var binds = 0;
+    List<int>? sent;
     Never fail() => throw Exception('channel error');
     final paper = switch (status) {
       ContractStatus.normal => true,
@@ -26,21 +28,28 @@ void main() {
         connectPollInterval: Duration.zero,
         printTimeout: printTimeout,
         stuckAfter: stuckAfter,
-        bind: () async => dependenciesThrow ? fail() : connected,
+        bind: () async {
+          if (dependenciesThrow) fail();
+          binds++;
+          return connected;
+        },
         unbind: () async => dependenciesThrow ? fail() : null,
         hasPaper: () async {
           if (dependenciesThrow) fail();
           if (!connected) return null;
           return paper;
         },
-        printBitmap: (_, __) async {
+        printBitmap: (png, __) async {
           if (dependenciesThrow) fail();
           sends++;
+          sent = png;
           await onSend?.call();
           return XchengPrintOutcome.unknown;
         },
       ),
       sends: () => sends,
+      lastSentPng: () => sent,
+      connectAttempts: () => binds,
     );
   }, supportsUnknownStatus: false);
 

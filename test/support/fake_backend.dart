@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:blue_thermal_printer/printer_backend.dart';
 
 /// [PrinterBackend] palsu minimal untuk test komposisi (fallback, deteksi).
@@ -15,6 +17,7 @@ class FakeBackend implements PrinterBackend {
   int disconnects = 0;
   int prints = 0;
   int statusChecks = 0;
+  int ensures = 0;
 
   @override
   String get displayName => name;
@@ -40,6 +43,26 @@ class FakeBackend implements PrinterBackend {
   }
 
   @override
+  Future<PrinterResult<PrinterDevice>> ensureConnected({
+    PrinterDevice? lastDevice,
+  }) async {
+    ensures++;
+    final device = PrinterDevice(name: name, macAddress: '$name-builtin');
+    return (await connect(device)).map((_) => device);
+  }
+
+  @override
+  Future<PrinterCapabilities> capabilities() async => PrinterCapabilities(
+    paperWidthPx: 384,
+    autoCut: false,
+    confirmsPrint: name == 'Xcheng',
+  );
+
+  @override
+  Future<Uint8List> preview(Receipt receipt) async =>
+      Uint8List.fromList(name.codeUnits);
+
+  @override
   Future<void> disconnect() async => disconnects++;
 
   @override
@@ -52,7 +75,7 @@ class FakeBackend implements PrinterBackend {
   }
 
   @override
-  Future<PrinterResult<void>> printReceipt(Receipt receipt) async {
+  Future<PrinterResult<PrintDelivery>> printReceipt(Receipt receipt) async {
     prints++;
     return PrinterErr(PrinterFailure('$name: Kertas printer habis.'));
   }

@@ -1,4 +1,7 @@
+import 'dart:typed_data';
+
 import 'printer_backend.dart';
+import 'printer_capabilities.dart';
 import 'printer_device.dart';
 import 'printer_status.dart';
 import 'receipt.dart';
@@ -57,6 +60,40 @@ class PrinterBackendFallback implements PrinterBackend {
     return fallbackResult;
   }
 
+  /// Seperti [connect]: coba [primary], dan pindah ke [fallback] hanya bila
+  /// [primary] gagal tersambung. Bila [fallback] sudah aktif, ia dipakai
+  /// langsung -- `ensureConnected` bisa dipanggil sebelum tiap cetak, dan
+  /// mencoba ulang [primary] tiap kali berarti membayar polling connect-nya
+  /// (±3 dtk) berulang-ulang. [disconnect] mengembalikan urutan ke [primary].
+  @override
+  Future<PrinterResult<PrinterDevice>> ensureConnected({
+    PrinterDevice? lastDevice,
+  }) async {
+    if (identical(_active, fallback)) {
+      final activeResult = await fallback.ensureConnected(
+        lastDevice: lastDevice,
+      );
+      if (activeResult.isOk) return activeResult;
+    }
+    final primaryResult = await primary.ensureConnected(lastDevice: lastDevice);
+    if (primaryResult.isOk) {
+      _active = primary;
+      return primaryResult;
+    }
+    await primary.disconnect();
+    final fallbackResult = await fallback.ensureConnected(
+      lastDevice: lastDevice,
+    );
+    _active = fallbackResult.isOk ? fallback : primary;
+    return fallbackResult;
+  }
+
+  @override
+  Future<PrinterCapabilities> capabilities() => _active.capabilities();
+
+  @override
+  Future<Uint8List> preview(Receipt receipt) => _active.preview(receipt);
+
   @override
   Future<void> disconnect() async {
     await _active.disconnect();
@@ -71,7 +108,7 @@ class PrinterBackendFallback implements PrinterBackend {
   Future<PrinterResult<PrinterStatus>> checkStatus() => _active.checkStatus();
 
   @override
-  Future<PrinterResult<void>> printReceipt(Receipt receipt) =>
+  Future<PrinterResult<PrintDelivery>> printReceipt(Receipt receipt) =>
       _active.printReceipt(receipt);
 
   @override

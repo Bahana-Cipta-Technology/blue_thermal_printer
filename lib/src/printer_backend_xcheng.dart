@@ -1,7 +1,9 @@
 import 'package:flutter/services.dart';
 
+import 'built_in_connection.dart';
 import 'print_job_gate.dart';
 import 'printer_backend.dart';
+import 'printer_capabilities.dart';
 import 'printer_device.dart';
 import 'printer_status.dart';
 import 'receipt.dart';
@@ -82,6 +84,17 @@ class PrinterBackendXcheng implements PrinterBackend {
 
   static const _connectPollAttempts = 15;
 
+  /// Kemampuan tetap backend ini (lihat `doc/contract-extensions-design.md`
+  /// §2): servis Xcheng tidak punya API lebar kertas (margin maksimum 384
+  /// dot = 58 mm) maupun pemotong; sensor kertas `printerPaper()` dan
+  /// `onComplete()` terverifikasi di hardware.
+  static const capabilitiesValue = PrinterCapabilities(
+    paperWidthPx: 384,
+    autoCut: false,
+    reportsPaperOut: true,
+    confirmsPrint: true,
+  );
+
   final ReceiptRenderer _renderer;
   final Duration _connectPollInterval;
   final PrintJobGate _gate;
@@ -92,6 +105,14 @@ class PrinterBackendXcheng implements PrinterBackend {
   final Future<bool?> Function() _hasPaper;
   final Future<XchengPrintOutcome> Function(List<int> png, int feedLines)
   _printBitmap;
+  final _ensureFlight = SingleFlight<PrinterResult<PrinterDevice>>();
+
+  /// Renderer yang dipakai bersama [preview] dan [printReceipt], supaya
+  /// pratinjau identik dengan cetakan.
+  ReceiptRenderer get _printRenderer => ReceiptRenderer(
+    width: capabilitiesValue.paperWidthPx,
+    fontFamily: _renderer.fontFamily,
+  );
 
   @override
   String get displayName => 'Printer Bawaan Xcheng';
@@ -138,6 +159,19 @@ class PrinterBackendXcheng implements PrinterBackend {
   }
 
   @override
+  Future<PrinterResult<PrinterDevice>> ensureConnected({
+    PrinterDevice? lastDevice,
+  }) => _ensureFlight.run(
+    () => ensureBuiltInConnected(this, kXchengBuiltInDevice),
+  );
+
+  @override
+  Future<PrinterCapabilities> capabilities() async => capabilitiesValue;
+
+  @override
+  Future<Uint8List> preview(Receipt receipt) => _printRenderer.preview(receipt);
+
+  @override
   Future<void> disconnect() async {
     try {
       await _unbind();
@@ -171,10 +205,10 @@ class PrinterBackendXcheng implements PrinterBackend {
   }
 
   @override
-  Future<PrinterResult<void>> printReceipt(Receipt receipt) =>
+  Future<PrinterResult<PrintDelivery>> printReceipt(Receipt receipt) =>
       _gate.run(() => _send(receipt));
 
-  Future<PrinterResult<void>> _send(Receipt receipt) async {
+  Future<PrinterResult<PrintDelivery>> _send(Receipt receipt) async {
     try {
       if (!await isConnected()) {
         return const PrinterErr(
@@ -188,10 +222,10 @@ class PrinterBackendXcheng implements PrinterBackend {
       if (preStatus.hasKnownProblem) {
         return PrinterErr(PrinterFailure(preStatus.problemMessage!));
       }
-      final bytes = await _renderer.preview(receipt);
+      final bytes = await _printRenderer.preview(receipt);
       switch (await _printBitmap(bytes, feedLines)) {
         case XchengPrintOutcome.printed:
-          return const PrinterOk(null);
+          return const PrinterOk(PrintDelivery.confirmed);
         case XchengPrintOutcome.failed:
           final status = await _statusOrUnknown();
           return PrinterErr(
@@ -205,7 +239,7 @@ class PrinterBackendXcheng implements PrinterBackend {
           if (status.hasKnownProblem) {
             return PrinterErr(PrinterFailure(status.problemMessage!));
           }
-          return const PrinterOk(null);
+          return const PrinterOk(PrintDelivery.unverified);
       }
     } catch (_) {
       return const PrinterErr(

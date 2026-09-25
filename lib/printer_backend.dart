@@ -8,6 +8,7 @@
 /// yang jadi source of truth lintas backend/app konsumen.
 library;
 
+export 'src/built_in_connection.dart';
 export 'src/print_job_gate.dart';
 export 'src/printer_backend.dart';
 export 'src/printer_backend_escpos.dart';
@@ -15,6 +16,7 @@ export 'src/printer_backend_fallback.dart';
 export 'src/printer_backend_imin.dart';
 export 'src/printer_backend_sunmi.dart';
 export 'src/printer_backend_xcheng.dart';
+export 'src/printer_capabilities.dart';
 export 'src/printer_device.dart';
 export 'src/printer_status.dart';
 export 'src/printer_vendor.dart';
