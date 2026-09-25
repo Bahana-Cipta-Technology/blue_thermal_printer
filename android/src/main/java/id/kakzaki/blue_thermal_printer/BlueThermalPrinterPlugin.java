@@ -64,6 +64,7 @@ import com.google.zxing.MultiFormatWriter;
 import com.google.zxing.common.BitMatrix;
 import com.journeyapps.barcodescanner.BarcodeEncoder;
 
+import id.kakzaki.blue_thermal_printer.vendor.imin.IminPrinterChannel;
 import id.kakzaki.blue_thermal_printer.vendor.sunmi.SunmiPrinterChannel;
 import id.kakzaki.blue_thermal_printer.vendor.xcheng.XchengPrinterChannel;
 
@@ -118,6 +119,9 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
   // Vendor Xcheng (antarmuka native servis printer bawaan Xcheng) -- alternatif opsional untuk
   // perangkat Xcheng, terisolasi di `vendor.xcheng`, channel "blue_thermal_printer/xcheng".
   private XchengPrinterChannel xchengPrinterChannel;
+  // Vendor iMin SDK 2.0 (stub AIDL resmi IminPrinterLibrary) -- terisolasi di `vendor.imin`,
+  // channel "blue_thermal_printer/imin".
+  private IminPrinterChannel iminPrinterChannel;
 
   public BlueThermalPrinterPlugin() {
   }
@@ -127,6 +131,7 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
     pluginBinding = binding;
     sunmiPrinterChannel = new SunmiPrinterChannel(binding.getApplicationContext(), binding.getBinaryMessenger());
     xchengPrinterChannel = new XchengPrinterChannel(binding.getApplicationContext(), binding.getBinaryMessenger());
+    iminPrinterChannel = new IminPrinterChannel(binding.getApplicationContext(), binding.getBinaryMessenger());
   }
 
   @Override
@@ -136,6 +141,8 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
     sunmiPrinterChannel = null;
     xchengPrinterChannel.dispose();
     xchengPrinterChannel = null;
+    iminPrinterChannel.dispose();
+    iminPrinterChannel = null;
   }
 
   @Override

@@ -16,6 +16,14 @@ rootProject.allprojects {
     repositories {
         google()
         mavenCentral()
+        // Library resmi iMin (vendor/imin/) hanya diterbitkan lewat JitPack. Gradle me-resolve
+        // dependency plugin memakai repo milik app, jadi repo ini disuntik dari sini supaya app
+        // konsumen tidak perlu mengubah Gradle-nya -- dibatasi includeGroup supaya dependency lain
+        // tidak ikut di-resolve dari JitPack. Lihat doc/vendor-imin-design.md §3.
+        maven {
+            url 'https://jitpack.io'
+            content { includeGroup 'com.github.iminsoftware' }
+        }
     }
 }
 
@@ -29,7 +37,8 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
     defaultConfig {
-        minSdkVersion 18
+        // 21 = minSdk IminPrinterLibrary (dan batas bawah Flutter sendiri).
+        minSdkVersion 21
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
     lintOptions {
@@ -45,6 +54,10 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.8.0'
     implementation 'com.google.zxing:core:3.5.4'
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+
+    // Stub AIDL resmi servis printer iMin SDK 2.0 (vendor/imin/). Versi dipatok tepat: urutan
+    // method servis iMin append-only, jadi versi lama tetap cocok dengan servis yang lebih baru.
+    implementation 'com.github.iminsoftware:IminPrinterLibrary:V2.0.0.19'
 
     // Hanya untuk helper Java murni (RasterImageEncoder, EscPosStatus) -- lihat src/test/.
     testImplementation 'junit:junit:4.13.2'

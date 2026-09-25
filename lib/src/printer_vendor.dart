@@ -1,6 +1,7 @@
 import 'printer_backend.dart';
 import 'printer_backend_escpos.dart';
 import 'printer_backend_fallback.dart';
+import 'printer_backend_imin.dart';
 import 'printer_backend_sunmi.dart';
 import 'printer_backend_xcheng.dart';
 
@@ -14,14 +15,15 @@ import 'printer_backend_xcheng.dart';
 ///
 /// Nilai disimpan app konsumen berdasarkan `name`, jadi urutan di sini hanya
 /// memengaruhi urutan tampil di UI.
-enum PrinterVendor { innerSunmi, bluetooth, innerXcheng }
+enum PrinterVendor { innerSunmi, bluetooth, innerXcheng, innerImin }
 
 /// Bangun implementasi [PrinterBackend] konkret untuk [vendor].
 ///
 /// [PrinterVendor.innerXcheng] memakai antarmuka native Xcheng
 /// ([PrinterBackendXcheng]) dan kembali ke AIDL kompatibel Sunmi yang juga
 /// disediakan servis Xcheng bila antarmuka native itu tidak bisa terhubung
-/// (lihat [PrinterBackendFallback]).
+/// (lihat [PrinterBackendFallback]). [PrinterVendor.innerImin] untuk printer
+/// bawaan iMin SDK 2.0 ([PrinterBackendImin]).
 PrinterBackend createPrinterBackend(PrinterVendor vendor) => switch (vendor) {
   PrinterVendor.innerSunmi => PrinterBackendSunmi(),
   PrinterVendor.bluetooth => PrinterBackendEscpos(),
@@ -29,17 +31,23 @@ PrinterBackend createPrinterBackend(PrinterVendor vendor) => switch (vendor) {
     primary: PrinterBackendXcheng(),
     fallback: PrinterBackendSunmi(),
   ),
+  PrinterVendor.innerImin => PrinterBackendImin(),
 };
 
 /// Urutan pengecekan printer bawaan: yang paling spesifik dulu. Servis
 /// Xcheng juga menyediakan AIDL kompatibel Sunmi, jadi Sunmi yang dicek
 /// lebih dulu akan salah mengenali perangkat Xcheng sebagai Sunmi (dan
-/// kehilangan sensor kertasnya).
-const _builtInDetectionOrder = [PrinterVendor.innerXcheng, PrinterVendor.innerSunmi];
+/// kehilangan sensor kertasnya). iMin juga dicek sebelum Sunmi dengan alasan
+/// yang sama, berjaga-jaga bila servisnya ikut mengekspos AIDL Woyou.
+const _builtInDetectionOrder = [
+  PrinterVendor.innerXcheng,
+  PrinterVendor.innerImin,
+  PrinterVendor.innerSunmi,
+];
 
-/// Deteksi printer bawaan perangkat ini: vendor pertama (Xcheng, lalu Sunmi)
-/// yang berhasil terhubung, atau `null` bila tidak ada printer bawaan (pakai
-/// Bluetooth). Cukup dipanggil sekali (mis. saat boot) -- hardware tidak
+/// Deteksi printer bawaan perangkat ini: vendor pertama (Xcheng, iMin, lalu
+/// Sunmi) yang berhasil terhubung, atau `null` bila tidak ada printer bawaan
+/// (pakai Bluetooth). Cukup dipanggil sekali (mis. saat boot) -- hardware tidak
 /// berubah selama app hidup. Tiap probe diputus lagi setelah dicek.
 ///
 /// Untuk Xcheng, probe memakai [PrinterBackendXcheng] langsung (tanpa

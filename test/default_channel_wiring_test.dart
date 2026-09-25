@@ -159,4 +159,60 @@ void main() {
       expect(await PrinterBackendXcheng().isAvailable(), isFalse);
     });
   });
+
+  group('iMin (blue_thermal_printer/imin)', () {
+    const channel = MethodChannel('blue_thermal_printer/imin');
+
+    tearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    test('status + paperType + printTransaction memakai nama method/argumen native',
+        () async {
+      final calls = <MethodCall>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return switch (call.method) {
+          'status' => 0,
+          'paperType' => 80,
+          'printTransaction' => 'printed',
+          _ => null,
+        };
+      });
+
+      final result = await PrinterBackendImin().printReceipt(
+        const Receipt(lines: [ReceiptCenter('TES')]),
+      );
+
+      expect(result.isOk, isTrue);
+      final print = calls.singleWhere((c) => c.method == 'printTransaction');
+      final args = print.arguments as Map;
+      expect((args['bytes'] as Uint8List).sublist(0, 4), [137, 80, 78, 71]);
+      expect(args['feedDistance'], PrinterBackendImin.feedDistance);
+      expect(args['cut'], isTrue);
+    });
+
+    test('status 7 dari native memblokir tanpa printTransaction', () async {
+      final calls = <String>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call.method);
+        return call.method == 'status' ? 7 : null;
+      });
+
+      final result = await PrinterBackendImin().printReceipt(
+        const Receipt(lines: []),
+      );
+
+      expect(result.failureOrNull?.message, 'Kertas printer habis.');
+      expect(calls, isNot(contains('printTransaction')));
+    });
+
+    test('status null (channel tanpa jawaban) dianggap belum siap', () async {
+      messenger.setMockMethodCallHandler(channel, (call) async => null);
+
+      expect(await PrinterBackendImin().isAvailable(), isFalse);
+    });
+
+    test('perangkat non-iMin (channel tanpa handler) tidak tersedia', () async {
+      expect(await PrinterBackendImin().isAvailable(), isFalse);
+    });
+  });
 }

@@ -8,6 +8,8 @@
       <!-- Servis printer bawaan Xcheng (vendor/xcheng/, backend opsional). Di perangkat Xcheng
            servis ini juga yang menyediakan AIDL kompatibel Sunmi di atas. -->
       <package android:name="com.xcheng.printerservice" />
+      <!-- Servis printer bawaan iMin SDK 2.0 (vendor/imin/). -->
+      <package android:name="com.imin.printerservice" />
     </queries>
 
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>

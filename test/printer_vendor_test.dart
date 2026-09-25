@@ -29,6 +29,13 @@ void main() {
     expect(backend.requiresPairing, isFalse);
   });
 
+  test('innerImin membangun PrinterBackendImin', () {
+    final backend = createPrinterBackend(PrinterVendor.innerImin);
+
+    expect(backend, isA<PrinterBackendImin>());
+    expect(backend.requiresPairing, isFalse);
+  });
+
   group('detectBuiltInPrinterVendor', () {
     FakeBackend fake(bool connects) => FakeBackend(connectResult: connects);
 
@@ -46,12 +53,34 @@ void main() {
       expect(probed, [PrinterVendor.innerXcheng]);
     });
 
-    test('bukan Xcheng -> Sunmi', () async {
+    test('bukan Xcheng -> iMin dicek sebelum Sunmi', () async {
+      final probed = <PrinterVendor>[];
       final vendor = await detectBuiltInPrinterVendor(
-        probe: (v) => fake(v == PrinterVendor.innerSunmi),
+        probe: (v) {
+          probed.add(v);
+          return fake(v != PrinterVendor.innerXcheng);
+        },
+      );
+
+      expect(vendor, PrinterVendor.innerImin);
+      expect(probed, [PrinterVendor.innerXcheng, PrinterVendor.innerImin]);
+    });
+
+    test('bukan Xcheng/iMin -> Sunmi', () async {
+      final probed = <PrinterVendor>[];
+      final vendor = await detectBuiltInPrinterVendor(
+        probe: (v) {
+          probed.add(v);
+          return fake(v == PrinterVendor.innerSunmi);
+        },
       );
 
       expect(vendor, PrinterVendor.innerSunmi);
+      expect(probed, [
+        PrinterVendor.innerXcheng,
+        PrinterVendor.innerImin,
+        PrinterVendor.innerSunmi,
+      ]);
     });
 
     test('tanpa printer bawaan -> null (pakai Bluetooth)', () async {
