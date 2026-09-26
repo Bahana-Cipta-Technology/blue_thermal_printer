@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:blue_thermal_printer/printer_backend.dart';
@@ -92,6 +93,32 @@ void main() {
     final parsed = bands(await const ReceiptRenderer().encode(const Receipt(lines: [])));
 
     expect(parsed.single.rows, greaterThan(0));
+  });
+
+  test('packRaster: piksel gelap -> bit 1 (MSB = piksel paling kiri)', () {
+    // 16x2 px: baris 0 hanya piksel x=0 dan x=9 hitam; baris 1 putih semua.
+    final rgba = Uint8List(16 * 2 * 4)..fillRange(0, 16 * 2 * 4, 255);
+    for (final x in [0, 9]) {
+      rgba.setAll(x * 4, [0, 0, 0, 255]);
+    }
+
+    final bytes = ReceiptRenderer.packRaster(rgba, 16, 2);
+
+    expect(bytes, [
+      27, 64, // ESC @
+      29, 118, 48, 0, 2, 0, 2, 0, // GS v 0, 2 byte/baris, 2 baris
+      0x80, 0x40, // baris 0
+      0x00, 0x00, // baris 1
+      27, 100, 2, // ESC d 2
+    ]);
+  });
+
+  test('packRaster memecah 300 baris jadi pita 128/128/44', () {
+    final parsed = bands(
+      ReceiptRenderer.packRaster(Uint8List(8 * 300 * 4), 8, 300),
+    );
+
+    expect(parsed.map((b) => b.rows), [128, 128, 44]);
   });
 
   test('preview menghasilkan PNG selebar width', () async {

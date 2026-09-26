@@ -10,6 +10,7 @@ import android.os.Binder;
 import android.os.IBinder;
 import android.os.Parcel;
 import android.os.RemoteException;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.util.concurrent.ArrayBlockingQueue;
@@ -59,6 +60,12 @@ public class XchengPrinterBridge {
   // onComplete datang ~60 ms setelah struk pendek tercetak; struk panjang butuh beberapa detik.
   // Tanpa kertas callback tidak pernah datang sama sekali -- lalu sensor kertas yang menentukan.
   private static final long PRINT_RESULT_TIMEOUT_MILLIS = 10_000;
+
+  // Selama menunggu callback, sensor kertas dicek tiap interval ini. Kertas habis = callback
+  // dipastikan tidak akan datang, jadi penantian dihentikan lebih awal tanpa menunggu timeout
+  // penuh. Kertas ada / sensor tidak menjawab = tetap menunggu seperti biasa, supaya struk
+  // panjang tetap mendapat konfirmasi onComplete.
+  private static final long PAPER_POLL_INTERVAL_MILLIS = 500;
 
   private final Context context;
   private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -196,18 +203,37 @@ public class XchengPrinterBridge {
       reply.recycle();
     }
 
-    String outcome;
-    try {
-      outcome = mailbox.poll(PRINT_RESULT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
-    } catch (InterruptedException error) {
-      Thread.currentThread().interrupt();
-      outcome = null;
-    }
+    String outcome = awaitOutcome(mailbox);
     if (outcome == null) return OUTCOME_UNKNOWN;
     if (OUTCOME_PRINTED.equals(outcome) && feedLines > 0) {
       feedQuietly(binder, feedLines);
     }
     return outcome;
+  }
+
+  /** Tunggu callback hasil cetak hingga {@link #PRINT_RESULT_TIMEOUT_MILLIS}; {@code null} bila
+   * tidak ada callback atau sensor melaporkan kertas habis lebih dulu (pemanggil Dart lalu
+   * membaca sensor lagi dan melaporkan "kertas habis"). */
+  private String awaitOutcome(ArrayBlockingQueue<String> mailbox) {
+    long deadline = SystemClock.elapsedRealtime() + PRINT_RESULT_TIMEOUT_MILLIS;
+    try {
+      while (true) {
+        long remaining = deadline - SystemClock.elapsedRealtime();
+        if (remaining <= 0) return null;
+        String outcome = mailbox.poll(
+            Math.min(remaining, PAPER_POLL_INTERVAL_MILLIS), TimeUnit.MILLISECONDS);
+        if (outcome != null) return outcome;
+        if (Boolean.FALSE.equals(hasPaper())) {
+          // Callback yang datang tepat bersamaan tetap diutamakan.
+          outcome = mailbox.poll();
+          if (outcome == null) Log.i(TAG, "Kertas habis saat menunggu hasil cetak");
+          return outcome;
+        }
+      }
+    } catch (InterruptedException error) {
+      Thread.currentThread().interrupt();
+      return null;
+    }
   }
 
   private void feedQuietly(IBinder binder, int lines) {

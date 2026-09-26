@@ -1,5 +1,7 @@
+import 'dart:isolate';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/painting.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'receipt.dart';
@@ -127,31 +129,51 @@ class ReceiptRenderer {
 
   Future<List<int>> encode(Receipt receipt) async {
     final image = await render(receipt);
+    final int height;
+    final Uint8List rgba;
     try {
-      final data = (await image.toByteData(
+      height = image.height;
+      rgba = (await image.toByteData(
         format: ui.ImageByteFormat.rawRgba,
-      ))!;
-      final bytes = <int>[27, 64];
-      // Kirim raster per pita agar tinggi gambar tidak melampaui buffer printer.
-      for (var top = 0; top < image.height; top += 128) {
-        final height = (image.height - top).clamp(0, 128);
-        bytes.addAll([29, 118, 48, 0, width ~/ 8, 0, height, 0]);
-        for (var y = top; y < top + height; y++) {
-          for (var x = 0; x < width; x += 8) {
-            var value = 0;
-            for (var bit = 0; bit < 8; bit++) {
-              if (data.getUint8((y * width + x + bit) * 4) < 128) {
-                value |= 128 >> bit;
-              }
-            }
-            bytes.add(value);
-          }
-        }
-      }
-      bytes.addAll([27, 100, 2]);
-      return bytes;
+      ))!.buffer.asUint8List();
     } finally {
       image.dispose();
     }
+    // Render dan toByteData wajib di isolate utama (`dart:ui`), tapi
+    // pengemasan bit ratusan ribu piksel adalah kerja CPU murni -- dijalankan
+    // di isolate terpisah supaya tidak membuat UI patah-patah di EDC kelas
+    // bawah.
+    final w = width;
+    return Isolate.run(() => packRaster(rgba, w, height));
+  }
+
+  /// Kemas piksel RGBA jadi perintah raster ESC/POS: `ESC @`, pita
+  /// `GS v 0` setinggi <=128 baris (agar tidak melampaui buffer printer),
+  /// lalu feed `ESC d 2`. Piksel dengan kanal merah < 128 dicetak hitam.
+  /// Fungsi murni tanpa `dart:ui`, sehingga aman dijalankan di isolate lain.
+  @visibleForTesting
+  static Uint8List packRaster(Uint8List rgba, int width, int height) {
+    final bytesPerRow = width ~/ 8;
+    final bandCount = (height + 127) ~/ 128;
+    final out = Uint8List(2 + bandCount * 8 + bytesPerRow * height + 3);
+    var i = 0;
+    out[i++] = 27;
+    out[i++] = 64;
+    for (var top = 0; top < height; top += 128) {
+      final bandHeight = (height - top).clamp(0, 128);
+      out.setAll(i, [29, 118, 48, 0, bytesPerRow, 0, bandHeight, 0]);
+      i += 8;
+      for (var y = top; y < top + bandHeight; y++) {
+        for (var x = 0; x < width; x += 8) {
+          var value = 0;
+          for (var bit = 0; bit < 8; bit++) {
+            if (rgba[(y * width + x + bit) * 4] < 128) value |= 128 >> bit;
+          }
+          out[i++] = value;
+        }
+      }
+    }
+    out.setAll(i, const [27, 100, 2]);
+    return out;
   }
 }

@@ -6,6 +6,10 @@ import android.os.Looper;
 
 import androidx.annotation.NonNull;
 
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+
 import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
@@ -23,6 +27,7 @@ public class IminPrinterChannel implements MethodCallHandler {
   private final IminPrinterBridge bridge;
   private final MethodChannel channel;
   private final Handler mainHandler = new Handler(Looper.getMainLooper());
+  private final ExecutorService queryExecutor = Executors.newSingleThreadExecutor();
 
   public IminPrinterChannel(Context context, BinaryMessenger messenger) {
     bridge = new IminPrinterBridge(context.getApplicationContext());
@@ -43,11 +48,11 @@ public class IminPrinterChannel implements MethodCallHandler {
         break;
 
       case "status":
-        result.success(bridge.status());
+        runQuery(result, bridge::status);
         break;
 
       case "paperType":
-        result.success(bridge.paperType());
+        runQuery(result, bridge::paperType);
         break;
 
       case "printResultVerified":
@@ -74,6 +79,30 @@ public class IminPrinterChannel implements MethodCallHandler {
 
   public void dispose() {
     channel.setMethodCallHandler(null);
+    queryExecutor.shutdown();
     bridge.dispose();
+  }
+
+  /** Query status yang memanggil binder IPC sinkron. */
+  private interface Query {
+    Object run();
+  }
+
+  /** Jalankan {@code query} di {@link #queryExecutor}, lalu kirim hasilnya lewat main thread (syarat
+   * {@link Result}). Sejak Flutter 3.29, Dart di Android berjalan di main thread yang sama
+   * (merged platform/UI thread), jadi binder transact langsung di {@link #onMethodCall} ikut
+   * membekukan UI selama servis printer lambat menjawab (mis. sibuk menahan data saat kertas
+   * habis). Executor ini terpisah dari executor cetak di bridge, karena executor cetak bisa
+   * tertahan belasan detik menunggu callback hasil cetak. */
+  private void runQuery(Result result, Query query) {
+    try {
+      queryExecutor.execute(() -> {
+        Object value = query.run();
+        mainHandler.post(() -> result.success(value));
+      });
+    } catch (RejectedExecutionException error) {
+      // Channel sudah di-dispose.
+      result.error("disposed", "printer channel disposed", null);
+    }
   }
 }
