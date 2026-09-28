@@ -1,5 +1,7 @@
 import 'printer_backend.dart';
 import 'printer_backend_escpos.dart';
+import 'printer_backend_escpos_network.dart';
+import 'printer_backend_escpos_usb.dart';
 import 'printer_backend_fallback.dart';
 import 'printer_backend_imin.dart';
 import 'printer_backend_sunmi.dart';
@@ -15,7 +17,7 @@ import 'printer_backend_xcheng.dart';
 ///
 /// Nilai disimpan app konsumen berdasarkan `name`, jadi urutan di sini hanya
 /// memengaruhi urutan tampil di UI.
-enum PrinterVendor { innerSunmi, bluetooth, innerXcheng, innerImin }
+enum PrinterVendor { innerSunmi, bluetooth, innerXcheng, innerImin, lan, usb }
 
 /// Bangun implementasi [PrinterBackend] konkret untuk [vendor].
 ///
@@ -23,7 +25,9 @@ enum PrinterVendor { innerSunmi, bluetooth, innerXcheng, innerImin }
 /// ([PrinterBackendXcheng]) dan kembali ke AIDL kompatibel Sunmi yang juga
 /// disediakan servis Xcheng bila antarmuka native itu tidak bisa terhubung
 /// (lihat [PrinterBackendFallback]). [PrinterVendor.innerImin] untuk printer
-/// bawaan iMin SDK 2.0 ([PrinterBackendImin]).
+/// bawaan iMin SDK 2.0 ([PrinterBackendImin]). [PrinterVendor.lan] dan
+/// [PrinterVendor.usb] memakai logika ESC/POS yang sama dengan Bluetooth di
+/// atas [NetworkEscposTransport]/[UsbEscposTransport].
 PrinterBackend createPrinterBackend(PrinterVendor vendor) => switch (vendor) {
   PrinterVendor.innerSunmi => PrinterBackendSunmi(),
   PrinterVendor.bluetooth => PrinterBackendEscpos(),
@@ -32,6 +36,8 @@ PrinterBackend createPrinterBackend(PrinterVendor vendor) => switch (vendor) {
     fallback: PrinterBackendSunmi(),
   ),
   PrinterVendor.innerImin => PrinterBackendImin(),
+  PrinterVendor.lan => PrinterBackendEscpos.withTransport(NetworkEscposTransport()),
+  PrinterVendor.usb => PrinterBackendEscpos.withTransport(UsbEscposTransport()),
 };
 
 /// Urutan pengecekan printer bawaan: yang paling spesifik dulu. Servis

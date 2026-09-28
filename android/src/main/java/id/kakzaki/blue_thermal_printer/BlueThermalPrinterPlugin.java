@@ -64,6 +64,8 @@ import com.google.zxing.MultiFormatWriter;
 import com.google.zxing.common.BitMatrix;
 import com.journeyapps.barcodescanner.BarcodeEncoder;
 
+import id.kakzaki.blue_thermal_printer.transport.net.NetPrinterChannel;
+import id.kakzaki.blue_thermal_printer.transport.usb.UsbPrinterChannel;
 import id.kakzaki.blue_thermal_printer.vendor.imin.IminPrinterChannel;
 import id.kakzaki.blue_thermal_printer.vendor.sunmi.SunmiPrinterChannel;
 import id.kakzaki.blue_thermal_printer.vendor.xcheng.XchengPrinterChannel;
@@ -123,6 +125,11 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
   // channel "blue_thermal_printer/imin".
   private IminPrinterChannel iminPrinterChannel;
 
+  // Transport ESC/POS LAN & USB (transport/net, transport/usb) -- channel terpisah dari channel
+  // Bluetooth lama di atas, didaftarkan per engine seperti channel vendor.
+  private NetPrinterChannel netPrinterChannel;
+  private UsbPrinterChannel usbPrinterChannel;
+
   public BlueThermalPrinterPlugin() {
   }
 
@@ -132,6 +139,8 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
     sunmiPrinterChannel = new SunmiPrinterChannel(binding.getApplicationContext(), binding.getBinaryMessenger());
     xchengPrinterChannel = new XchengPrinterChannel(binding.getApplicationContext(), binding.getBinaryMessenger());
     iminPrinterChannel = new IminPrinterChannel(binding.getApplicationContext(), binding.getBinaryMessenger());
+    netPrinterChannel = new NetPrinterChannel(binding.getBinaryMessenger());
+    usbPrinterChannel = new UsbPrinterChannel(binding.getApplicationContext(), binding.getBinaryMessenger());
   }
 
   @Override
@@ -143,6 +152,10 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
     xchengPrinterChannel = null;
     iminPrinterChannel.dispose();
     iminPrinterChannel = null;
+    netPrinterChannel.dispose();
+    netPrinterChannel = null;
+    usbPrinterChannel.dispose();
+    usbPrinterChannel = null;
   }
 
   @Override

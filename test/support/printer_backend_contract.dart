@@ -15,6 +15,7 @@ class ContractHarness {
     required this.sends,
     this.lastSentPng,
     this.connectAttempts,
+    this.lastDevice,
   });
 
   final PrinterBackend backend;
@@ -28,6 +29,11 @@ class ContractHarness {
 
   /// Berapa kali percobaan koneksi native (bind/connect) dimulai.
   final int Function()? connectAttempts;
+
+  /// Perangkat tersimpan untuk `ensureConnected`; `null` = entri pertama
+  /// `discoverDevices()`. Diisi backend tanpa discovery (mis. LAN, alamat
+  /// dimasukkan pengguna).
+  final PrinterDevice? lastDevice;
 }
 
 /// Lebar PNG dari chunk IHDR (big-endian, byte 16..19).
@@ -133,7 +139,8 @@ void runPrinterBackendContract(
     test('ensureConnected saat terhubung idempoten', () async {
       final harness = build(connected: true);
       final backend = harness.backend;
-      final last = (await backend.discoverDevices()).firstOrNull;
+      final last =
+          harness.lastDevice ?? (await backend.discoverDevices()).firstOrNull;
 
       final first = await backend.ensureConnected(lastDevice: last);
       final second = await backend.ensureConnected(lastDevice: last);
@@ -146,7 +153,8 @@ void runPrinterBackendContract(
     test('ensureConnected bersamaan berbagi satu percobaan native', () async {
       final harness = build(connected: false);
       final backend = harness.backend;
-      final last = (await backend.discoverDevices()).firstOrNull;
+      final last =
+          harness.lastDevice ?? (await backend.discoverDevices()).firstOrNull;
 
       final results = await Future.wait([
         backend.ensureConnected(lastDevice: last),

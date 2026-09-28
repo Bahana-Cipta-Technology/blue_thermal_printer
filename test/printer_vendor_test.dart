@@ -36,6 +36,18 @@ void main() {
     expect(backend.requiresPairing, isFalse);
   });
 
+  test('lan dan usb membangun PrinterBackendEscpos dengan transportnya', () {
+    final lan = createPrinterBackend(PrinterVendor.lan);
+    final usb = createPrinterBackend(PrinterVendor.usb);
+
+    expect(lan, isA<PrinterBackendEscpos>());
+    expect(lan.displayName, 'Printer LAN (ESC/POS)');
+    expect(lan.requiresPairing, isTrue);
+    expect(usb, isA<PrinterBackendEscpos>());
+    expect(usb.displayName, 'Printer USB (ESC/POS)');
+    expect(usb.requiresPairing, isTrue);
+  });
+
   group('detectBuiltInPrinterVendor', () {
     FakeBackend fake(bool connects) => FakeBackend(connectResult: connects);
 
@@ -85,6 +97,19 @@ void main() {
 
     test('tanpa printer bawaan -> null (pakai Bluetooth)', () async {
       expect(await detectBuiltInPrinterVendor(probe: (_) => fake(false)), isNull);
+    });
+
+    test('lan/usb bukan printer bawaan, tidak pernah di-probe', () async {
+      final probed = <PrinterVendor>[];
+      await detectBuiltInPrinterVendor(
+        probe: (vendor) {
+          probed.add(vendor);
+          return fake(false);
+        },
+      );
+
+      expect(probed, isNot(contains(PrinterVendor.lan)));
+      expect(probed, isNot(contains(PrinterVendor.usb)));
     });
 
     test('probe yang melempar dianggap tidak tersedia dan tetap diputus',

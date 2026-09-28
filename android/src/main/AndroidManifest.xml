@@ -12,6 +12,13 @@
       <package android:name="com.imin.printerservice" />
     </queries>
 
+    <!-- Transport ESC/POS LAN (transport/net/): socket TCP ke printer jaringan. Izin normal,
+         diberikan otomatis saat instal. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Transport ESC/POS USB (transport/usb/). required="false" supaya app tetap bisa dipasang di
+         perangkat tanpa USB host; ketersediaannya dicek saat runtime. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
+
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <!-- Request legacy Bluetooth permissions on older devices. -->
     <uses-permission android:name="android.permission.BLUETOOTH"

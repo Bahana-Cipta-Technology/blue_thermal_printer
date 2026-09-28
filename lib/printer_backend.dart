@@ -9,9 +9,13 @@
 library;
 
 export 'src/built_in_connection.dart';
+export 'src/built_in_printer_backend.dart';
 export 'src/print_job_gate.dart';
 export 'src/printer_backend.dart';
+export 'src/escpos_transport.dart';
 export 'src/printer_backend_escpos.dart';
+export 'src/printer_backend_escpos_network.dart';
+export 'src/printer_backend_escpos_usb.dart';
 export 'src/printer_backend_fallback.dart';
 export 'src/printer_backend_imin.dart';
 export 'src/printer_backend_sunmi.dart';

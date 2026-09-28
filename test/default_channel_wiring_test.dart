@@ -215,4 +215,74 @@ void main() {
       expect(await PrinterBackendImin().isAvailable(), isFalse);
     });
   });
+
+  group('LAN (blue_thermal_printer/escpos_net)', () {
+    const channel = MethodChannel(NetworkEscposTransport.channelName);
+    tearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    test('connect/isConnected/queryStatus/writeBytes memakai nama method native',
+        () async {
+      final calls = <MethodCall>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return switch (call.method) {
+          'isAvailable' || 'connect' || 'isConnected' || 'writeBytes' => true,
+          'queryStatus' => 0x12,
+          _ => null,
+        };
+      });
+      final backend = createPrinterBackend(PrinterVendor.lan);
+
+      final connected = await backend.connect(
+        const PrinterDevice(name: 'LAN', macAddress: '192.168.1.50'),
+      );
+      final printed = await backend.printReceipt(const Receipt(lines: []));
+
+      expect(connected.isOk, isTrue);
+      expect(printed.valueOrNull, PrintDelivery.unverified);
+      final connect = calls.singleWhere((c) => c.method == 'connect');
+      expect(connect.arguments, {'host': '192.168.1.50', 'port': 9100});
+      final query = calls.firstWhere((c) => c.method == 'queryStatus');
+      expect(query.arguments, {'type': 2});
+      final write = calls.singleWhere((c) => c.method == 'writeBytes');
+      expect((write.arguments as Map)['bytes'], isA<Uint8List>());
+    });
+
+    test('channel tanpa handler (mis. desktop) tidak tersedia', () async {
+      expect(await createPrinterBackend(PrinterVendor.lan).isAvailable(), isFalse);
+    });
+  });
+
+  group('USB (blue_thermal_printer/escpos_usb)', () {
+    const channel = MethodChannel(UsbEscposTransport.channelName);
+    tearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    test('devices + connect memakai nama method/argumen native', () async {
+      final calls = <MethodCall>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return switch (call.method) {
+          'isAvailable' => true,
+          'devices' => [
+            {'name': 'POS-58', 'vendorId': 1155, 'productId': 22304},
+          ],
+          'connect' => 'connected',
+          _ => null,
+        };
+      });
+      final backend = createPrinterBackend(PrinterVendor.usb);
+
+      final devices = await backend.discoverDevices();
+      final result = await backend.ensureConnected(lastDevice: devices.single);
+
+      expect(devices.single.macAddress, 'usb:1155:22304');
+      expect(result.valueOrNull, devices.single);
+      final connect = calls.singleWhere((c) => c.method == 'connect');
+      expect(connect.arguments, {'vendorId': 1155, 'productId': 22304});
+    });
+
+    test('channel tanpa handler (mis. desktop) tidak tersedia', () async {
+      expect(await createPrinterBackend(PrinterVendor.usb).isAvailable(), isFalse);
+    });
+  });
 }

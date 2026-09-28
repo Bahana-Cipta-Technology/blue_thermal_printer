@@ -1,3 +1,11 @@
+## Unreleased — fondasi lintas vendor (F1 + F3)
+Detail, rancangan F2/F4 yang ditunda, dan checklist hardware: `doc/foundation-design.md`.
+* Baru: `BuiltInPrinterBackend` -- kerangka bersama printer bawaan; Sunmi/Xcheng/iMin kini subclass-nya (constructor publik tidak berubah). `PrintOutcome` netral vendor; `SunmiPrintOutcome`/`XchengPrintOutcome`/`IminPrintOutcome` jadi `typedef`.
+* Sunmi: outcome `unknown` + query status yang gagal setelah data terkirim kini `Ok(unverified)` (sebelumnya `Err`), sama dengan Xcheng/iMin.
+* Baru: `EscposTransport` -- `PrinterBackendEscpos` bisa memakai transport selain Bluetooth (`PrinterBackendEscpos.withTransport`). Constructor Bluetooth lama tidak berubah.
+* Baru: `PrinterVendor.lan` (`NetworkEscposTransport`, TCP 9100, `parseNetworkAddress`) dan `PrinterVendor.usb` (`UsbEscposTransport`, bulk transfer + izin USB), native di `transport/net/` dan `transport/usb/`.
+* Manifest: `INTERNET` dan `uses-feature android.hardware.usb.host` (`required="false"`).
+
 ## Unreleased (fork Bahana-Cipta-Technology) — audit September 2026
 Detail + checklist verifikasi hardware: `doc/audit-2026-09.md`.
 * Sunmi: kode `updatePrinterState()` dipetakan sesuai tabel AIDL resmi (kertas habis = 4, bukan 3) lewat `sunmiStateToStatus()`.
