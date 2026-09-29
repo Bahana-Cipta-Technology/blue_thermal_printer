@@ -48,6 +48,36 @@ void main() {
     expect(usb.requiresPairing, isTrue);
   });
 
+  group('PrinterTransport', () {
+    test('setiap vendor tepat satu transport, konsisten dengan vendorsOf', () {
+      for (final vendor in PrinterVendor.values) {
+        final owners = PrinterTransport.values.where(
+          (transport) => vendorsOf(transport).contains(vendor),
+        );
+        expect(owners, [vendor.transport], reason: vendor.name);
+      }
+    });
+
+    test('printer bawaan mengikuti urutan deteksi', () {
+      expect(vendorsOf(PrinterTransport.builtIn), [
+        PrinterVendor.innerXcheng,
+        PrinterVendor.innerImin,
+        PrinterVendor.innerSunmi,
+      ]);
+      expect(vendorsOf(PrinterTransport.bluetooth), [PrinterVendor.bluetooth]);
+    });
+
+    test('backend bawaan tanpa pairing, transport lain butuh pairing', () {
+      for (final vendor in PrinterVendor.values) {
+        expect(
+          createPrinterBackend(vendor).requiresPairing,
+          vendor.transport != PrinterTransport.builtIn,
+          reason: vendor.name,
+        );
+      }
+    });
+  });
+
   group('detectBuiltInPrinterVendor', () {
     FakeBackend fake(bool connects) => FakeBackend(connectResult: connects);
 

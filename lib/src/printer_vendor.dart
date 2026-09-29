@@ -19,6 +19,34 @@ import 'printer_backend_xcheng.dart';
 /// memengaruhi urutan tampil di UI.
 enum PrinterVendor { innerSunmi, bluetooth, innerXcheng, innerImin, lan, usb }
 
+/// Jalur fisik ke printer -- tingkat pertama yang dilihat pengguna saat
+/// memilih printer ("printernya nempel di mesin / Bluetooth / jaringan /
+/// kabel"), sebelum memilih vendor/perangkat spesifik.
+enum PrinterTransport { builtIn, bluetooth, lan, usb }
+
+/// Pengelompokan [PrinterVendor] per [PrinterTransport] -- dijaga exhaustive
+/// oleh compiler, jadi vendor baru wajib menyebut transport-nya.
+extension PrinterVendorTransport on PrinterVendor {
+  PrinterTransport get transport => switch (this) {
+    PrinterVendor.innerSunmi ||
+    PrinterVendor.innerXcheng ||
+    PrinterVendor.innerImin => PrinterTransport.builtIn,
+    PrinterVendor.bluetooth => PrinterTransport.bluetooth,
+    PrinterVendor.lan => PrinterTransport.lan,
+    PrinterVendor.usb => PrinterTransport.usb,
+  };
+}
+
+/// Vendor milik [transport]. Untuk [PrinterTransport.builtIn] urutannya sama
+/// dengan urutan deteksi printer bawaan (paling spesifik dulu).
+List<PrinterVendor> vendorsOf(PrinterTransport transport) => switch (transport) {
+  PrinterTransport.builtIn => _builtInDetectionOrder,
+  _ => [
+    for (final vendor in PrinterVendor.values)
+      if (vendor.transport == transport) vendor,
+  ],
+};
+
 /// Bangun implementasi [PrinterBackend] konkret untuk [vendor].
 ///
 /// [PrinterVendor.innerXcheng] memakai antarmuka native Xcheng
