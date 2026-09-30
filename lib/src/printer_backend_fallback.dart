@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'paper_width.dart';
 import 'printer_backend.dart';
 import 'printer_capabilities.dart';
 import 'printer_device.dart';
@@ -90,6 +91,17 @@ class PrinterBackendFallback implements PrinterBackend {
 
   @override
   Future<PrinterCapabilities> capabilities() => _active.capabilities();
+
+  @override
+  bool get supportsPaperWidthSetting => _active.supportsPaperWidthSetting;
+
+  /// Diteruskan ke keduanya supaya pilihan tetap berlaku setelah pindah
+  /// backend.
+  @override
+  void setPaperWidth(PaperWidthSetting setting) {
+    primary.setPaperWidth(setting);
+    fallback.setPaperWidth(setting);
+  }
 
   @override
   Future<Uint8List> preview(Receipt receipt) => _active.preview(receipt);

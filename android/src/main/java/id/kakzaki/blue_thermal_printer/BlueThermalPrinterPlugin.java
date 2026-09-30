@@ -369,6 +369,14 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
         }
         break;
 
+      case "queryPrinterId":
+        if (arguments.containsKey("type")) {
+          queryPrinterId(result, (int) arguments.get("type"));
+        } else {
+          result.error("invalid_argument", "argument 'type' not found", null);
+        }
+        break;
+
       case "printCustom":
         if (arguments.containsKey("message")) {
           String message = (String) arguments.get("message");
@@ -846,35 +854,55 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
 
   /**
    * Kirim query status real-time ESC/POS (DLE EOT n, lihat {@link PrinterCommands}) dan
-   * tunggu satu byte respons lewat {@link ConnectedThread#awaitStatusResponse(long)}.
+   * tunggu satu byte respons lewat {@link ConnectedThread#awaitResponse(long)}.
    * {@code null} berarti printer tidak merespons dalam {@link #STATUS_QUERY_TIMEOUT_MILLIS}
    * -- dianggap "tidak diketahui", bukan galat, karena tidak semua printer clone ESC/POS
    * mengimplementasikan query ini.
    */
   private void queryPrinterStatus(Result result, int statusType) {
-    final ConnectedThread thread = activeConnection();
-    if (thread == null) {
-      result.error("write_error", "not connected", null);
-      return;
-    }
     byte[] command = statusQueryCommand(statusType);
     if (command == null) {
       result.error("invalid_argument", "unsupported status type: " + statusType, null);
       return;
     }
+    querySingleByte(result, command, ConnectedThread.AWAIT_STATUS,
+        "queryPrinterStatus(type=" + statusType + ")");
+  }
+
+  /**
+   * Kirim {@code GS I n} (transmit printer ID) dan tunggu satu byte ID yang sah (lihat
+   * {@link EscPosPrinterId}). {@code null} = printer tidak menjawab -- banyak printer clone tidak
+   * mengimplementasikan perintah ini.
+   */
+  private void queryPrinterId(Result result, int idType) {
+    byte[] command = EscPosPrinterId.queryCommand(idType);
+    if (command == null) {
+      result.error("invalid_argument", "unsupported printer id type: " + idType, null);
+      return;
+    }
+    querySingleByte(result, command, ConnectedThread.AWAIT_ID,
+        "queryPrinterId(type=" + idType + ")");
+  }
+
+  private void querySingleByte(Result result, byte[] command, int awaited, String label) {
+    final ConnectedThread thread = activeConnection();
+    if (thread == null) {
+      result.error("write_error", "not connected", null);
+      return;
+    }
     AsyncTask.execute(() -> {
-      thread.armStatusRequest();
+      thread.armRequest(awaited);
       if (!thread.write(command)) {
-        result.error("write_error", "failed to write status query to the printer socket", null);
+        thread.disarmRequest();
+        result.error("write_error", "failed to write query to the printer socket", null);
         return;
       }
-      Integer response = thread.awaitStatusResponse(STATUS_QUERY_TIMEOUT_MILLIS);
+      Integer response = thread.awaitResponse(STATUS_QUERY_TIMEOUT_MILLIS);
       if (response == null) {
-        Log.w(TAG, "queryPrinterStatus(type=" + statusType + "): no response within "
-            + STATUS_QUERY_TIMEOUT_MILLIS + "ms -- printer may not support DLE EOT status queries");
+        Log.w(TAG, label + ": no response within " + STATUS_QUERY_TIMEOUT_MILLIS
+            + "ms -- printer may not support this query");
       } else {
-        Log.i(TAG, "queryPrinterStatus(type=" + statusType + "): response byte = 0x"
-            + Integer.toHexString(response));
+        Log.i(TAG, label + ": response byte = 0x" + Integer.toHexString(response));
       }
       result.success(response);
     });
@@ -1159,12 +1187,17 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
     private final OutputStream outputStream;
     private volatile boolean closed = false;
 
-    // Mailbox satu slot dipakai queryPrinterStatus() untuk menangkap byte respons DLE EOT
-    // tanpa membuka thread pembaca kedua di atas InputStream yang sama -- run() di bawah ini
-    // tetap satu-satunya pembaca socket, ia cuma dialihkan sementara ke mailbox alih-alih
+    /** Jenis respons satu byte yang sedang ditunggu {@link #run()}. */
+    static final int AWAIT_NONE = 0;
+    static final int AWAIT_STATUS = 1; // DLE EOT n, lihat EscPosStatus
+    static final int AWAIT_ID = 2; // GS I n, lihat EscPosPrinterId
+
+    // Mailbox satu slot dipakai querySingleByte() untuk menangkap byte respons (DLE EOT /
+    // GS I) tanpa membuka thread pembaca kedua di atas InputStream yang sama -- run() di bawah
+    // ini tetap satu-satunya pembaca socket, ia cuma dialihkan sementara ke mailbox alih-alih
     // readSink saat sebuah query sedang ditunggu.
-    private final ArrayBlockingQueue<Byte> statusResponseMailbox = new ArrayBlockingQueue<>(1);
-    private volatile boolean awaitingStatusResponse = false;
+    private final ArrayBlockingQueue<Byte> responseMailbox = new ArrayBlockingQueue<>(1);
+    private volatile int awaitedResponse = AWAIT_NONE;
 
     ConnectedThread(BluetoothSocket socket, String address) {
       this.address = address;
@@ -1194,13 +1227,16 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
           int bytes = inputStream.read(buffer);
           if (bytes < 0) break;
           if (bytes == 0) continue;
-          if (awaitingStatusResponse) {
-            // Cari byte status yang sah di seluruh potongan data -- byte lain (XON/XOFF, sisa
+          int awaited = awaitedResponse;
+          if (awaited != AWAIT_NONE) {
+            // Cari byte respons yang sah di seluruh potongan data -- byte lain (XON/XOFF, sisa
             // respons lama) tidak boleh menggantikan respons query yang sedang ditunggu.
-            int index = EscPosStatus.indexOfRealtimeStatus(buffer, bytes);
+            int index = awaited == AWAIT_ID
+                ? EscPosPrinterId.indexOfIdResponse(buffer, bytes)
+                : EscPosStatus.indexOfRealtimeStatus(buffer, bytes);
             if (index >= 0) {
-              awaitingStatusResponse = false;
-              statusResponseMailbox.offer(buffer[index]);
+              awaitedResponse = AWAIT_NONE;
+              responseMailbox.offer(buffer[index]);
               emitRead(buffer, 0, index);
               emitRead(buffer, index + 1, bytes - index - 1);
               continue;
@@ -1237,27 +1273,32 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
       });
     }
 
-    /** Bersihkan mailbox lalu tandai byte status sah berikutnya sebagai respons query. */
-    void armStatusRequest() {
-      statusResponseMailbox.clear();
-      awaitingStatusResponse = true;
+    /** Bersihkan mailbox lalu tandai byte sah berikutnya (jenis {@code awaited}) sebagai
+     * respons query. */
+    void armRequest(int awaited) {
+      responseMailbox.clear();
+      awaitedResponse = awaited;
+    }
+
+    void disarmRequest() {
+      awaitedResponse = AWAIT_NONE;
     }
 
     /**
-     * Tunggu byte respons query status hingga {@code timeoutMillis}, dikembalikan sebagai
+     * Tunggu byte respons query hingga {@code timeoutMillis}, dikembalikan sebagai
      * {@code int} tak-bertanda (0-255). {@code null} kalau timeout atau terinterupsi. Selalu
-     * mematikan {@link #awaitingStatusResponse} di akhir supaya {@link #run()} kembali
+     * mengosongkan {@link #awaitedResponse} di akhir supaya {@link #run()} kembali
      * meneruskan byte apa pun ke {@code readSink} seperti biasa.
      */
-    Integer awaitStatusResponse(long timeoutMillis) {
+    Integer awaitResponse(long timeoutMillis) {
       try {
-        Byte response = statusResponseMailbox.poll(timeoutMillis, TimeUnit.MILLISECONDS);
+        Byte response = responseMailbox.poll(timeoutMillis, TimeUnit.MILLISECONDS);
         return response == null ? null : (response & 0xFF);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         return null;
       } finally {
-        awaitingStatusResponse = false;
+        awaitedResponse = AWAIT_NONE;
       }
     }
 

@@ -29,6 +29,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 
+import id.kakzaki.blue_thermal_printer.EscPosPrinterId;
 import id.kakzaki.blue_thermal_printer.EscPosStatus;
 import id.kakzaki.blue_thermal_printer.transport.TransportSupport;
 import io.flutter.plugin.common.BinaryMessenger;
@@ -129,7 +130,18 @@ public class UsbPrinterChannel implements MethodCallHandler {
           result.error("invalid_argument", "unsupported status type: " + type, null);
           break;
         }
-        run(ioExecutor, result, () -> queryStatus(command));
+        run(ioExecutor, result, () -> querySingleByte(command, false));
+        break;
+      }
+
+      case "queryPrinterId": {
+        Integer type = call.argument("type");
+        byte[] command = type == null ? null : EscPosPrinterId.queryCommand(type);
+        if (command == null) {
+          result.error("invalid_argument", "unsupported printer id type: " + type, null);
+          break;
+        }
+        run(ioExecutor, result, () -> querySingleByte(command, true));
         break;
       }
 
@@ -309,9 +321,9 @@ public class UsbPrinterChannel implements MethodCallHandler {
     return true;
   }
 
-  /** Byte respons {@code DLE EOT} yang sah, atau {@code null} bila printer tidak menjawab (atau
-   * tidak punya endpoint IN sama sekali). */
-  private Integer queryStatus(byte[] command) {
+  /** Byte respons sah -- {@code GS I} bila {@code printerId}, selain itu {@code DLE EOT} --
+   * atau {@code null} bila printer tidak menjawab (atau tidak punya endpoint IN sama sekali). */
+  private Integer querySingleByte(byte[] command, boolean printerId) {
     Connection connection = activeConnection();
     if (connection == null || connection.in == null) return null;
     byte[] buffer = new byte[64];
@@ -326,10 +338,13 @@ public class UsbPrinterChannel implements MethodCallHandler {
       int remaining = (int) Math.max(1, deadline - System.currentTimeMillis());
       int count = connection.connection.bulkTransfer(connection.in, buffer, buffer.length, remaining);
       if (count <= 0) continue;
-      int index = EscPosStatus.indexOfRealtimeStatus(buffer, count);
+      int index = printerId
+          ? EscPosPrinterId.indexOfIdResponse(buffer, count)
+          : EscPosStatus.indexOfRealtimeStatus(buffer, count);
       if (index >= 0) return buffer[index] & 0xFF;
     }
-    Log.w(TAG, "queryStatus: no response -- printer may not support DLE EOT");
+    Log.w(TAG, (printerId ? "queryPrinterId" : "queryStatus")
+        + ": no response -- printer may not support it");
     return null;
   }
 

@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'paper_width.dart';
 import 'printer_capabilities.dart';
 import 'printer_device.dart';
 import 'printer_status.dart';
@@ -81,6 +82,18 @@ abstract interface class PrinterBackend {
   /// pernah melempar -- sebelum terhubung mengembalikan nilai terakhir yang
   /// diketahui atau [PrinterCapabilities.fallback58].
   Future<PrinterCapabilities> capabilities();
+
+  /// `true` bila lebar kertas backend ini diatur lewat [setPaperWidth]
+  /// (ESC/POS, yang tidak bisa membaca lebar kertas dari printer). `false`
+  /// untuk backend yang tahu lebarnya sendiri (mis. printer bawaan lewat SDK
+  /// vendor) -- UI menyembunyikan pilihan lebar kertas.
+  bool get supportsPaperWidthSetting;
+
+  /// Terapkan lebar kertas pilihan pengguna ke [capabilities], [preview],
+  /// dan [printReceipt] berikutnya. Tidak pernah menulis ke printer dan
+  /// tidak pernah melempar; diabaikan bila [supportsPaperWidthSetting]
+  /// `false`.
+  void setPaperWidth(PaperWidthSetting setting);
 
   /// Gambar PNG struk yang identik dengan yang akan dicetak [printReceipt]
   /// (renderer dan lebar [PrinterCapabilities.paperWidthPx] yang sama).

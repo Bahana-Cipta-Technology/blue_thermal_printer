@@ -6,6 +6,7 @@ import 'package:app_settings/app_settings.dart';
 import '../blue_thermal_printer.dart';
 import 'built_in_connection.dart';
 import 'escpos_transport.dart';
+import 'paper_width.dart';
 import 'printer_backend.dart';
 import 'printer_capabilities.dart';
 import 'printer_device.dart';
@@ -39,6 +40,8 @@ class PrinterBackendEscpos implements PrinterBackend {
     Future<bool> Function(List<int>)? write,
     Future<List<int>> Function(Receipt)? encode,
     Future<PrinterStatus> Function()? checkStatus,
+    Future<int?> Function()? queryTypeId,
+    Future<int?> Function()? queryErrorStatus,
     Future<void> Function()? openSettings,
     Duration printTimeout = const Duration(seconds: 30),
     Duration stuckAfter = const Duration(seconds: 30),
@@ -52,6 +55,8 @@ class PrinterBackendEscpos implements PrinterBackend {
            connected: connected,
            write: write,
            checkStatus: checkStatus,
+           queryTypeId: queryTypeId,
+           queryErrorStatus: queryErrorStatus,
            openSettings: openSettings,
          ),
          renderer: renderer,
@@ -70,7 +75,7 @@ class PrinterBackendEscpos implements PrinterBackend {
     Duration stuckAfter = const Duration(seconds: 30),
   }) : _transport = transport,
        _renderer = renderer,
-       _encode = encode ?? renderer.encode {
+       _encodeOverride = encode {
     // Write native yang macet (socket tidak lagi dibaca printer) hanya bisa
     // dilepas dengan menutup koneksinya.
     _gate = PrintJobGate(
@@ -82,7 +87,27 @@ class PrinterBackendEscpos implements PrinterBackend {
 
   final EscposTransport _transport;
   final ReceiptRenderer _renderer;
-  final Future<List<int>> Function(Receipt) _encode;
+
+  /// Pengganti encoder untuk test; `null` = renderer selebar [_paperWidthPx].
+  final Future<List<int>> Function(Receipt)? _encodeOverride;
+
+  PaperWidthSetting _paperWidth = PaperWidthSetting.auto;
+
+  /// Lebar raster yang dipakai [preview]/[printReceipt]/[capabilities].
+  /// `auto`: autocutter terdeteksi dianggap 80 mm (printer ber-pemotong
+  /// hampir selalu 80 mm), selain itu lebar renderer bawaan. Memakai
+  /// [_cutterDetected], bukan [_shouldCut] -- circuit breaker cutter tidak
+  /// boleh mengubah lebar di tengah sesi.
+  int get _paperWidthPx => switch (_paperWidth) {
+    PaperWidthSetting.mm58 => paperWidth58Px,
+    PaperWidthSetting.mm80 => paperWidth80Px,
+    PaperWidthSetting.auto =>
+      _cutterDetected == true ? paperWidth80Px : _renderer.width,
+  };
+
+  ReceiptRenderer _rendererFor(int width) => width == _renderer.width
+      ? _renderer
+      : ReceiptRenderer(width: width, fontFamily: _renderer.fontFamily);
 
   late final PrintJobGate _gate;
 
@@ -104,6 +129,54 @@ class PrinterBackendEscpos implements PrinterBackend {
   void _resetStatusSupport() {
     _unansweredStatusQueries = 0;
     _statusEverAnswered = false;
+    _cutterProbed = false;
+    _cutterDetected = null;
+    _cutterTripped = false;
+  }
+
+  /// Hasil `GS I 2` printer yang sedang terhubung: `true` = autocutter
+  /// terbukti ada, `false` = terbukti tidak ada, `null` = tidak diketahui
+  /// (tidak menjawab / belum ditanya). Hanya `true` yang memicu cut --
+  /// firmware clone bisa mencetak perintah yang tidak dikenalnya sebagai
+  /// karakter sampah, sedangkan struk tanpa cut sama dengan perilaku lama.
+  bool? _cutterDetected;
+  bool _cutterProbed = false;
+
+  /// Circuit breaker: printer melaporkan galat autocutter (`DLE EOT 3`
+  /// bit 3) saat cut dipakai -- cut dimatikan sampai koneksi baru.
+  bool _cutterTripped = false;
+
+  bool get _shouldCut => _cutterDetected == true && !_cutterTripped;
+
+  /// Deteksi autocutter sekali per koneksi, hanya setelah printer terbukti
+  /// menjawab `DLE EOT` -- printer bisu (mis. `RPPInnerPrinter`) hampir pasti
+  /// juga tidak menjawab `GS I`, jadi tidak perlu membayar timeout-nya.
+  Future<void> _probeCutter() async {
+    if (_cutterProbed || !_statusEverAnswered) return;
+    _cutterProbed = true;
+    try {
+      final typeId = await _transport.queryPrinterTypeId();
+      _cutterDetected = typeId == null
+          ? null
+          : escposTypeIdHasAutoCutter(typeId);
+    } catch (error) {
+      _warn('Deteksi autocutter gagal', error);
+    }
+  }
+
+  /// Bila [status] melaporkan galat selagi cut dipakai, tanya `DLE EOT 3`;
+  /// galat autocutter mematikan cut untuk sisa koneksi ini.
+  Future<void> _noteCutterError(PrinterStatus status) async {
+    if (!_shouldCut || status.hasError != true) return;
+    try {
+      final error = await _transport.queryErrorStatus();
+      if (error != null && escposErrorStatusHasCutterError(error)) {
+        _cutterTripped = true;
+        _warn('Galat autocutter -- cut dimatikan sampai koneksi baru', error);
+      }
+    } catch (error) {
+      _warn('Query status galat gagal', error);
+    }
   }
 
   /// Alamat perangkat dari [connect] terakhir yang berhasil -- dukungan
@@ -255,8 +328,8 @@ class PrinterBackendEscpos implements PrinterBackend {
 
   @override
   Future<PrinterCapabilities> capabilities() async => PrinterCapabilities(
-    paperWidthPx: _renderer.width,
-    autoCut: false,
+    paperWidthPx: _paperWidthPx,
+    autoCut: _shouldCut,
     reportsPaperOut: _statusEverAnswered
         ? true
         : _statusUnsupported
@@ -268,7 +341,14 @@ class PrinterBackendEscpos implements PrinterBackend {
   );
 
   @override
-  Future<Uint8List> preview(Receipt receipt) => _renderer.preview(receipt);
+  bool get supportsPaperWidthSetting => true;
+
+  @override
+  void setPaperWidth(PaperWidthSetting setting) => _paperWidth = setting;
+
+  @override
+  Future<Uint8List> preview(Receipt receipt) =>
+      _rendererFor(_paperWidthPx).preview(receipt);
 
   @override
   Future<void> disconnect() async {
@@ -322,9 +402,18 @@ class PrinterBackendEscpos implements PrinterBackend {
       // dirancang begitu.
       final preStatus = await _queryStatus();
       if (preStatus.hasKnownProblem) {
+        // Galat cutter dari cetakan sebelumnya bisa baru terlihat di sini
+        // (post-check dijawab saat byte diterima, bukan setelah dipotong).
+        await _noteCutterError(preStatus);
         return PrinterErr(PrinterFailure(preStatus.problemMessage!));
       }
-      final bytes = await _encode(receipt);
+      await _probeCutter();
+      final bytes = [
+        ...await (_encodeOverride ?? _rendererFor(_paperWidthPx).encode)(
+          receipt,
+        ),
+        if (_shouldCut) ...escposFeedAndPartialCut,
+      ];
       if (!await _transport.write(bytes)) {
         return const PrinterErr(
           PrinterFailure(
@@ -338,6 +427,7 @@ class PrinterBackendEscpos implements PrinterBackend {
       // terkirim" tidak keliru dilaporkan sebagai "berhasil dicetak".
       final status = await _queryStatus();
       if (status.hasKnownProblem) {
+        await _noteCutterError(status);
         // Bersihkan buffer printer dari data yang baru saja gagal tercetak
         // sekarang juga -- best-effort, jangan sampai gagal di sini malah
         // menutupi pesan galat yang sebenarnya. Kalau operator tidak pernah
@@ -385,6 +475,8 @@ class _BluetoothEscposTransport extends EscposTransport {
     Future<bool> Function()? connected,
     Future<bool> Function(List<int>)? write,
     Future<PrinterStatus> Function()? checkStatus,
+    Future<int?> Function()? queryTypeId,
+    Future<int?> Function()? queryErrorStatus,
     Future<void> Function()? openSettings,
   }) : _isBluetoothOn =
            isBluetoothOn ??
@@ -441,6 +533,16 @@ class _BluetoothEscposTransport extends EscposTransport {
                return PrinterStatus.unknown;
              }
            }),
+       _queryTypeId =
+           queryTypeId ??
+           (() => BlueThermalPrinter.instance.queryPrinterId(
+             BlueThermalPrinter.printerIdTypeId,
+           )),
+       _queryErrorStatus =
+           queryErrorStatus ??
+           (() => BlueThermalPrinter.instance.queryPrinterStatus(
+             BlueThermalPrinter.statusTypeError,
+           )),
        _openSettings =
            openSettings ??
            (() => AppSettings.openAppSettings(type: AppSettingsType.bluetooth));
@@ -453,6 +555,8 @@ class _BluetoothEscposTransport extends EscposTransport {
   final Future<bool> Function() _connected;
   final Future<bool> Function(List<int>) _write;
   final Future<PrinterStatus> Function() _checkStatus;
+  final Future<int?> Function() _queryTypeId;
+  final Future<int?> Function() _queryErrorStatus;
   final Future<void> Function() _openSettings;
 
   @override
@@ -488,6 +592,24 @@ class _BluetoothEscposTransport extends EscposTransport {
 
   @override
   Future<PrinterStatus> queryStatus() => _checkStatus();
+
+  @override
+  Future<int?> queryPrinterTypeId() async {
+    try {
+      return await _queryTypeId();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<int?> queryErrorStatus() async {
+    try {
+      return await _queryErrorStatus();
+    } catch (_) {
+      return null;
+    }
+  }
 
   @override
   Future<void> openSettings() => _openSettings();

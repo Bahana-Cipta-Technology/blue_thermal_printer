@@ -83,6 +83,25 @@ Download SDK vendor saat runtime **tidak** dipakai. Kebijakan Play (*Device and 
 - Khusus LAN: field "Alamat Printer" + tombol Hubungkan, divalidasi dengan `parseNetworkAddress`. Alamat LAN tersimpan diisi ulang saat sheet dibuka, sedangkan MAC Bluetooth tersimpan tidak.
 - Penyimpanan preferensi dan auto-connect memakai alur yang sudah ada. Preferensi milik transport lain gagal dengan tenang (`requiresDeviceSelection`).
 
+**Auto cut otomatis (ketiga transport ESC/POS):**
+- Cut dipakai hanya bila printer **membuktikan** punya autocutter lewat `GS I 2` (Type ID bit 1). Tidak ada toggle, dialog, atau penyimpanan di app.
+- Deteksi berjalan sekali per koneksi, di dalam `PrintJobGate`, setelah pre-check yang dijawab. Printer yang belum pernah menjawab `DLE EOT` tidak ditanya, sehingga printer bisu tidak menanggung timeout tambahan. Hasilnya di-reset saat alamat perangkat berganti atau saat `disconnect()`.
+- Validasi byte (`EscPosPrinterId`, JUnit): bit 4 dan bit 7 bernilai tetap 0, sehingga status `DLE EOT` dan XON/XOFF (bit 4 = 1) tidak pernah terbaca sebagai ID.
+- Hasil `true` → data struk diakhiri `GS V 66 0` (feed ke posisi pisau lalu partial cut). Hasil `false` atau `null` → perilaku lama. `null` sengaja tidak memotong, karena firmware clone bisa mencetak perintah asing sebagai karakter sampah.
+- Circuit breaker: bila status melaporkan `hasError` selagi cut dipakai, `DLE EOT 3` ditanya. Bit 3 (galat autocutter) mematikan cut sampai koneksi baru.
+- Native: `queryPrinterId{type}` di ketiga channel, memakai mailbox satu byte yang sama dengan query status (mode tunggu `STATUS`/`ID`).
+
+**Lebar kertas ESC/POS (otomatis + koreksi):**
+- Riset: tidak ada command ESC/POS universal untuk membaca lebar kertas.
+  - Sensor printer thermal hanya mendeteksi ada/tidak ada kertas; lebar area cetak adalah setelan (DIP/memory switch).
+  - `GS ( E` fn 6 (Epson) bisa membaca "customized value" termasuk lebar kertas, tapi hanya di User Setting Mode yang me-reset printer saat keluar, jadi tidak aman saat operasional.
+  - `GS I 67` (nama model) tidak memuat lebar.
+- Kontrak: `PrinterBackend.supportsPaperWidthSetting` + `setPaperWidth(PaperWidthSetting)`. ESC/POS `true`; printer bawaan `false` (lebar dari SDK vendor).
+- Resolusi ESC/POS: `mm58` = 384 px, `mm80` = 576 px, `auto` = autocutter (`GS I 2`) terdeteksi → 576, selain itu lebar renderer. Circuit breaker cutter tidak mengubah lebar.
+- Gaya 80 mm: ukuran font sama, layout selebar 576 px (sama dengan iMin/Sunmi 80 mm).
+- App: pilihan disimpan di baris printer terakhir (`PrinterLastConnectedEntity.paperWidth`, `null` = otomatis). Menyambung ulang printer yang sama mempertahankan pilihan; printer lain mulai dari otomatis. Pemilih "Lebar kertas" (Otomatis/58/80) tampil di panel transport ESC/POS aktif yang tersambung.
+- Batasan: printer 80 mm dengan area cetak 512 dot (64 mm) akan terpotong di kanan pada 576 px, sehingga perlu pilihan 58 mm atau lebar tambahan kelak.
+
 **Batasan yang diketahui:**
 - `DLE EOT` dijawab saat byte diterima, bukan saat tercetak, jadi `confirmsPrint` tetap `false` (sama dengan Bluetooth).
 - Socket TCP ke printer yang mati tanpa FIN baru terdeteksi saat tulis atau query gagal.
@@ -131,3 +150,17 @@ F3 USB (printer USB lewat OTG):
 - [ ] Cetak struk utuh (struk panjang > 16 KB raster).
 - [ ] Cabut kabel saat idle → cetak gagal jelas; colok lagi → pilih printer → cetak.
 - [ ] Printer tanpa endpoint IN → status `unknown`, cetak tidak diblokir.
+
+Auto cut (`GS I 2`, semua transport ESC/POS):
+- [ ] Printer 80 mm ber-cutter: logcat `queryPrinterId(type=2): response byte` bit 1 menyala; struk terpotong partial dan baris terakhir tidak ikut terpotong.
+- [ ] Printer 58 mm tanpa cutter yang menjawab `GS I`: bit 1 mati, tidak ada `GS V`, hasil sama dengan sebelumnya.
+- [ ] Printer yang tidak menjawab `GS I`: tidak ada karakter sampah, dan cetakan berikutnya tidak tertunda lagi.
+- [ ] `RPPInnerPrinter` (Xcheng O1): tidak ada query `GS I` di logcat (status bisu), dan waktu cetak sama dengan sebelumnya.
+- [ ] Pisau macet/dibuka saat cetak (bila printer mengizinkan): galat dilaporkan, dan cetakan berikutnya tanpa cut.
+
+Lebar kertas ESC/POS:
+- [ ] Printer 80 mm ber-cutter, mode Otomatis: cetakan pertama selebar penuh; sheet menampilkan "Terdeteksi 80 mm".
+- [ ] Printer 58 mm: tetap 58 mm, tidak terpotong di kanan.
+- [ ] Pilih 58 mm pada printer 80 mm: struk kembali sempit (koreksi manual jalan).
+- [ ] Putus lalu sambung ulang printer yang sama: pilihan tetap; ganti printer: kembali Otomatis.
+- [ ] Xcheng O1 (printer bawaan): pemilih lebar tidak tampil.

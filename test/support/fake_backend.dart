@@ -18,6 +18,7 @@ class FakeBackend implements PrinterBackend {
   int prints = 0;
   int statusChecks = 0;
   int ensures = 0;
+  PaperWidthSetting? paperWidth;
 
   @override
   String get displayName => name;
@@ -57,6 +58,12 @@ class FakeBackend implements PrinterBackend {
     autoCut: false,
     confirmsPrint: name == 'Xcheng',
   );
+
+  @override
+  bool get supportsPaperWidthSetting => false;
+
+  @override
+  void setPaperWidth(PaperWidthSetting setting) => paperWidth = setting;
 
   @override
   Future<Uint8List> preview(Receipt receipt) async =>

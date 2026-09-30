@@ -136,6 +136,29 @@ void runPrinterBackendContract(
       }
     });
 
+    test('setPaperWidth tidak mengirim data dan preview mengikuti capabilities',
+        () async {
+      for (final throwing in [false, true]) {
+        final harness = build(connected: true, dependenciesThrow: throwing);
+        final backend = harness.backend;
+
+        for (final setting in PaperWidthSetting.values) {
+          backend.setPaperWidth(setting);
+          final caps = await backend.capabilities();
+          expect(pngWidth(await backend.preview(receipt)), caps.paperWidthPx);
+          if (backend.supportsPaperWidthSetting &&
+              setting != PaperWidthSetting.auto) {
+            expect(
+              caps.paperWidthPx,
+              setting == PaperWidthSetting.mm80 ? paperWidth80Px : paperWidth58Px,
+            );
+          }
+        }
+
+        expect(harness.sends(), 0);
+      }
+    });
+
     test('ensureConnected saat terhubung idempoten', () async {
       final harness = build(connected: true);
       final backend = harness.backend;

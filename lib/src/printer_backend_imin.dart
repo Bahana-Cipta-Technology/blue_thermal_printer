@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 
 import 'built_in_printer_backend.dart';
+import 'paper_width.dart';
 import 'printer_capabilities.dart';
 import 'printer_device.dart';
 import 'printer_status.dart';
@@ -92,8 +93,8 @@ class PrinterBackendImin extends BuiltInPrinterBackend {
   static const feedDistance = 70;
 
   /// Lebar raster (8 dot/mm) per jenis kertas `getPrinterPaperType`.
-  static const paper58WidthPx = 384;
-  static const paper80WidthPx = 576;
+  static const paper58WidthPx = paperWidth58Px;
+  static const paper80WidthPx = paperWidth80Px;
 
   final Future<bool> Function() _bind;
   final Future<void> Function() _unbind;

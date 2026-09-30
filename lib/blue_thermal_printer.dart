@@ -25,6 +25,10 @@ class BlueThermalPrinter {
   static const int statusTypeError = 3;
   static const int statusTypeRollPaperSensor = 4;
 
+  /// Tipe `GS I n` (transmit printer ID) -- lihat [queryPrinterId]. Type ID
+  /// bit 1 = autocutter terpasang.
+  static const int printerIdTypeId = 2;
+
   static const String namespace = 'blue_thermal_printer';
 
   static const MethodChannel _channel = MethodChannel('$namespace/methods');
@@ -98,6 +102,12 @@ class BlueThermalPrinter {
   ///printer clone tidak mengimplementasikan query ini.
   Future<int?> queryPrinterStatus(int statusType) =>
       _channel.invokeMethod('queryPrinterStatus', {'type': statusType});
+
+  ///queryPrinterId(int idType) -- ESC/POS GS I n (n = 1..3). Kembalikan byte
+  ///ID mentah (0-255), atau null bila printer tidak merespons dalam batas
+  ///waktu -- bukan galat, banyak printer clone tidak mengimplementasikannya.
+  Future<int?> queryPrinterId(int idType) =>
+      _channel.invokeMethod('queryPrinterId', {'type': idType});
 
   ///printCustom(String message, int size, int align,{String? charset})
   Future<bool?> printCustom(String message, int size, int align,

@@ -248,6 +248,34 @@ void main() {
       expect((write.arguments as Map)['bytes'], isA<Uint8List>());
     });
 
+    test('GS I 2 dengan bit autocutter menambahkan GS V 66 0 di akhir data',
+        () async {
+      final calls = <MethodCall>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return switch (call.method) {
+          'isAvailable' || 'connect' || 'isConnected' || 'writeBytes' => true,
+          'queryStatus' => 0x12,
+          'queryPrinterId' => 0x02,
+          _ => null,
+        };
+      });
+      final backend = createPrinterBackend(PrinterVendor.lan);
+
+      await backend.connect(
+        const PrinterDevice(name: 'LAN', macAddress: '192.168.1.50'),
+      );
+      await backend.printReceipt(const Receipt(lines: []));
+
+      final probe = calls.singleWhere((c) => c.method == 'queryPrinterId');
+      expect(probe.arguments, {'type': 2});
+      final bytes =
+          (calls.singleWhere((c) => c.method == 'writeBytes').arguments
+              as Map)['bytes'] as Uint8List;
+      expect(bytes.sublist(bytes.length - 4), [0x1D, 0x56, 66, 0]);
+      expect((await backend.capabilities()).autoCut, isTrue);
+    });
+
     test('channel tanpa handler (mis. desktop) tidak tersedia', () async {
       expect(await createPrinterBackend(PrinterVendor.lan).isAvailable(), isFalse);
     });

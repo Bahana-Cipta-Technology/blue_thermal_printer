@@ -10,6 +10,7 @@ library;
 
 export 'src/built_in_connection.dart';
 export 'src/built_in_printer_backend.dart';
+export 'src/paper_width.dart';
 export 'src/print_job_gate.dart';
 export 'src/printer_backend.dart';
 export 'src/escpos_transport.dart';

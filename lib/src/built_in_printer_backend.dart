@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'built_in_connection.dart';
+import 'paper_width.dart';
 import 'print_job_gate.dart';
 import 'printer_backend.dart';
 import 'printer_capabilities.dart';
@@ -113,6 +114,13 @@ abstract class BuiltInPrinterBackend implements PrinterBackend {
 
   @override
   bool get requiresPairing => false;
+
+  /// Lebar kertas dibaca dari servis vendor ([readCapabilities]).
+  @override
+  bool get supportsPaperWidthSetting => false;
+
+  @override
+  void setPaperWidth(PaperWidthSetting setting) {}
 
   @override
   Future<bool> isAvailable() async {

@@ -48,6 +48,14 @@ abstract class EscposTransport {
   /// [PrinterStatus.unknown] (semua field `null`), bukan galat.
   Future<PrinterStatus> queryStatus();
 
+  /// Byte Type ID dari `GS I 2`, atau `null` bila printer tidak menjawab
+  /// (atau transport tidak mendukung query ini). Default `null`, supaya
+  /// transport yang belum mengimplementasikannya tidak pernah memicu cut.
+  Future<int?> queryPrinterTypeId() async => null;
+
+  /// Byte status galat `DLE EOT 3`, atau `null` bila printer tidak menjawab.
+  Future<int?> queryErrorStatus() async => null;
+
   /// Buka setelan sistem yang relevan untuk transport ini (boleh no-op).
   Future<void> openSettings();
 
@@ -65,6 +73,24 @@ abstract class EscposTransport {
 /// Tipe query `DLE EOT n` untuk status offline (kertas/cover/error) -- sama
 /// dengan `BlueThermalPrinter.statusTypeOffline`.
 const escposOfflineStatusType = 2;
+
+/// Tipe query `DLE EOT n` untuk penyebab galat (bit 3 = galat autocutter).
+const escposErrorStatusType = 3;
+
+/// `n` pada `GS I n` untuk Type ID.
+const escposPrinterTypeIdType = 2;
+
+/// Type ID `GS I 2` bit 1: autocutter terpasang.
+bool escposTypeIdHasAutoCutter(int typeId) => typeId & 0x02 != 0;
+
+/// Status `DLE EOT 3` bit 3: galat autocutter.
+bool escposErrorStatusHasCutterError(int errorStatus) =>
+    errorStatus & 0x08 != 0;
+
+/// `GS V 66 0`: feed sampai posisi pisau lalu partial cut. Printer sendiri
+/// yang tahu jarak kepala cetak ke pisau, jadi baris terakhir tidak
+/// terpotong.
+const escposFeedAndPartialCut = <int>[0x1D, 0x56, 66, 0];
 
 /// Terjemahkan byte respons `DLE EOT 2` mentah (atau `null` = tidak ada
 /// jawaban) jadi [PrinterStatus].
@@ -105,6 +131,23 @@ abstract class ChannelEscposTransport extends EscposTransport {
       return escposOfflineStatus(raw is int ? raw : null);
     } catch (_) {
       return PrinterStatus.unknown;
+    }
+  }
+
+  @override
+  Future<int?> queryPrinterTypeId() =>
+      _queryByte('queryPrinterId', escposPrinterTypeIdType);
+
+  @override
+  Future<int?> queryErrorStatus() =>
+      _queryByte('queryStatus', escposErrorStatusType);
+
+  Future<int?> _queryByte(String method, int type) async {
+    try {
+      final raw = await invoke(method, {'type': type});
+      return raw is int ? raw : null;
+    } catch (_) {
+      return null;
     }
   }
 }

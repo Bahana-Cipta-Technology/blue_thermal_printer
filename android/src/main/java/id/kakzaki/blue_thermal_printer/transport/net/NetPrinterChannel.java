@@ -18,6 +18,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import id.kakzaki.blue_thermal_printer.EscPosPrinterId;
 import id.kakzaki.blue_thermal_printer.EscPosStatus;
 import id.kakzaki.blue_thermal_printer.transport.TransportSupport;
 import io.flutter.plugin.common.BinaryMessenger;
@@ -41,6 +42,11 @@ public class NetPrinterChannel implements MethodCallHandler {
 
   private static final String TAG = "NetPrinterChannel";
   private static final int CONNECT_TIMEOUT_MILLIS = 5_000;
+
+  /** Jenis respons satu byte yang sedang ditunggu reader. */
+  private static final int AWAIT_NONE = 0;
+  private static final int AWAIT_STATUS = 1;
+  private static final int AWAIT_ID = 2;
 
   private final MethodChannel channel;
   private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -99,7 +105,18 @@ public class NetPrinterChannel implements MethodCallHandler {
           result.error("invalid_argument", "unsupported status type: " + type, null);
           break;
         }
-        run(ioExecutor, result, () -> queryStatus(command));
+        run(ioExecutor, result, () -> querySingleByte(command, AWAIT_STATUS));
+        break;
+      }
+
+      case "queryPrinterId": {
+        Integer type = call.argument("type");
+        byte[] command = type == null ? null : EscPosPrinterId.queryCommand(type);
+        if (command == null) {
+          result.error("invalid_argument", "unsupported printer id type: " + type, null);
+          break;
+        }
+        run(ioExecutor, result, () -> querySingleByte(command, AWAIT_ID));
         break;
       }
 
@@ -159,29 +176,32 @@ public class NetPrinterChannel implements MethodCallHandler {
     }
   }
 
-  /** Byte respons {@code DLE EOT} yang sah, atau {@code null} bila printer tidak menjawab. */
-  private Integer queryStatus(byte[] command) throws InterruptedException {
+  /**
+   * Byte respons sah jenis {@code awaited} ({@code DLE EOT} / {@code GS I}), atau {@code null}
+   * bila printer tidak menjawab.
+   */
+  private Integer querySingleByte(byte[] command, int awaited) throws InterruptedException {
     Connection connection = activeConnection();
     if (connection == null) return null;
-    connection.statusMailbox.clear();
-    connection.awaitingStatus = true;
+    connection.responseMailbox.clear();
+    connection.awaitedResponse = awaited;
     try {
       connection.out.write(command);
       connection.out.flush();
-      Byte response = connection.statusMailbox.poll(
+      Byte response = connection.responseMailbox.poll(
           TransportSupport.STATUS_QUERY_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
       if (response == null) {
-        Log.w(TAG, "queryStatus: no response -- printer may not support DLE EOT");
+        Log.w(TAG, "query " + awaited + ": no response -- printer may not support it");
         return null;
       }
       return response & 0xFF;
     } catch (IOException error) {
-      Log.w(TAG, "queryStatus write failed", error);
+      Log.w(TAG, "query write failed", error);
       connectionRef.compareAndSet(connection, null);
       closeConnection(connection);
       return null;
     } finally {
-      connection.awaitingStatus = false;
+      connection.awaitedResponse = AWAIT_NONE;
     }
   }
 
@@ -215,7 +235,7 @@ public class NetPrinterChannel implements MethodCallHandler {
 
   /**
    * Satu socket TCP ke printer. {@link #reader} adalah satu-satunya pembaca InputStream: byte
-   * status yang sah dialihkan ke {@link #statusMailbox} selama query ditunggu, sisanya dibuang
+   * respons yang sah dialihkan ke {@link #responseMailbox} selama query ditunggu, sisanya dibuang
    * (tidak ada event channel "read" untuk LAN). Saat socket putus, reader menandai koneksi mati
    * supaya connect berikutnya membuka socket baru.
    */
@@ -225,9 +245,9 @@ public class NetPrinterChannel implements MethodCallHandler {
     final int port;
     final InputStream in;
     final OutputStream out;
-    final ArrayBlockingQueue<Byte> statusMailbox = new ArrayBlockingQueue<>(1);
+    final ArrayBlockingQueue<Byte> responseMailbox = new ArrayBlockingQueue<>(1);
     final Thread reader;
-    volatile boolean awaitingStatus = false;
+    volatile int awaitedResponse = AWAIT_NONE;
     volatile boolean closed = false;
 
     Connection(Socket socket, String host, int port) throws IOException {
@@ -250,11 +270,14 @@ public class NetPrinterChannel implements MethodCallHandler {
         while (!closed) {
           int count = in.read(buffer);
           if (count < 0) break;
-          if (count == 0 || !awaitingStatus) continue;
-          int index = EscPosStatus.indexOfRealtimeStatus(buffer, count);
+          int awaited = awaitedResponse;
+          if (count == 0 || awaited == AWAIT_NONE) continue;
+          int index = awaited == AWAIT_ID
+              ? EscPosPrinterId.indexOfIdResponse(buffer, count)
+              : EscPosStatus.indexOfRealtimeStatus(buffer, count);
           if (index >= 0) {
-            awaitingStatus = false;
-            statusMailbox.offer(buffer[index]);
+            awaitedResponse = AWAIT_NONE;
+            responseMailbox.offer(buffer[index]);
           }
         }
       } catch (IOException ignored) {
