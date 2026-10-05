@@ -8,11 +8,13 @@
 /// yang jadi source of truth lintas backend/app konsumen.
 library;
 
+export 'src/bluetooth_control.dart';
 export 'src/built_in_connection.dart';
 export 'src/built_in_printer_backend.dart';
 export 'src/paper_width.dart';
 export 'src/print_job_gate.dart';
 export 'src/printer_backend.dart';
+export 'src/device_scanner.dart';
 export 'src/escpos_transport.dart';
 export 'src/printer_backend_escpos.dart';
 export 'src/printer_backend_escpos_network.dart';
@@ -23,8 +25,11 @@ export 'src/printer_backend_sunmi.dart';
 export 'src/printer_backend_xcheng.dart';
 export 'src/printer_capabilities.dart';
 export 'src/printer_device.dart';
+export 'src/printer_features.dart';
 export 'src/printer_status.dart';
 export 'src/printer_vendor.dart';
 export 'src/receipt.dart';
 export 'src/receipt_renderer.dart';
 export 'src/result.dart';
+export 'src/transport_power.dart';
+export 'src/transport_prerequisites.dart';

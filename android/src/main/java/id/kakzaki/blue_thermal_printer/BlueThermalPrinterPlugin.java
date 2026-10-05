@@ -64,6 +64,8 @@ import com.google.zxing.MultiFormatWriter;
 import com.google.zxing.common.BitMatrix;
 import com.journeyapps.barcodescanner.BarcodeEncoder;
 
+import id.kakzaki.blue_thermal_printer.transport.bluetooth.BluetoothControlChannel;
+import id.kakzaki.blue_thermal_printer.transport.bluetooth.BluetoothRequirementPolicy;
 import id.kakzaki.blue_thermal_printer.transport.net.NetPrinterChannel;
 import id.kakzaki.blue_thermal_printer.transport.usb.UsbPrinterChannel;
 import id.kakzaki.blue_thermal_printer.vendor.imin.IminPrinterChannel;
@@ -74,7 +76,7 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
 
   private static final String TAG = "BThermalPrinterPlugin";
   private static final String NAMESPACE = "blue_thermal_printer";
-  private static final int REQUEST_COARSE_LOCATION_PERMISSIONS = 1451;
+  private static final int REQUEST_BLUETOOTH_PERMISSIONS = 1451;
   private static final UUID MY_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
   // Batas waktu tunggu socket.connect() sebelum dianggap gagal -- cukup untuk radio BT merespons
   // tapi tidak bikin user menunggu terlalu lama kalau device tidak terjangkau.
@@ -130,6 +132,10 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
   private NetPrinterChannel netPrinterChannel;
   private UsbPrinterChannel usbPrinterChannel;
 
+  // Kontrol adapter Bluetooth (prasyarat, nyala/mati, pencarian, pairing) -- transport/bluetooth,
+  // channel "blue_thermal_printer/bluetooth". Koneksi SPP tetap di channel lama di atas.
+  private BluetoothControlChannel bluetoothControlChannel;
+
   public BlueThermalPrinterPlugin() {
   }
 
@@ -141,6 +147,7 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
     iminPrinterChannel = new IminPrinterChannel(binding.getApplicationContext(), binding.getBinaryMessenger());
     netPrinterChannel = new NetPrinterChannel(binding.getBinaryMessenger());
     usbPrinterChannel = new UsbPrinterChannel(binding.getApplicationContext(), binding.getBinaryMessenger());
+    bluetoothControlChannel = new BluetoothControlChannel(binding.getApplicationContext(), binding.getBinaryMessenger());
   }
 
   @Override
@@ -156,11 +163,14 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
     netPrinterChannel = null;
     usbPrinterChannel.dispose();
     usbPrinterChannel = null;
+    bluetoothControlChannel.dispose();
+    bluetoothControlChannel = null;
   }
 
   @Override
   public void onAttachedToActivity(@NonNull ActivityPluginBinding binding) {
     activityBinding = binding;
+    bluetoothControlChannel.attachActivity(binding);
     setup(
             pluginBinding.getBinaryMessenger(),
             (Application) pluginBinding.getApplicationContext(),
@@ -180,6 +190,7 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
 
   @Override
   public void onDetachedFromActivity() {
+    bluetoothControlChannel.detachActivity();
     detach();
   }
 
@@ -297,29 +308,23 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
 
       case "getBondedDevices":
         try {
-
-          if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-
-            if (!hasRequiredBluetoothPermissions()) {
-
-              ActivityCompat.requestPermissions(activity,new String[]{
-                      Manifest.permission.BLUETOOTH_SCAN,
-                      Manifest.permission.BLUETOOTH_CONNECT,
-                      Manifest.permission.ACCESS_FINE_LOCATION,
-              }, REQUEST_COARSE_LOCATION_PERMISSIONS);
-
-              pendingResult = result;
+          // Daftar perangkat terpasang tidak butuh lokasi di versi Android mana pun; API 31+ butuh
+          // "Perangkat sekitar". Izin lokasi untuk pencarian diminta lewat channel bluetooth.
+          List<String> missing = missingPermissions(
+              BluetoothRequirementPolicy.connectPermissions(Build.VERSION.SDK_INT));
+          if (!missing.isEmpty()) {
+            if (pendingResult != null) {
+              result.error("request_in_progress", "a permission request is already pending", null);
               break;
             }
-          } else {
-            if (!hasRequiredBluetoothPermissions()) {
-
-              ActivityCompat.requestPermissions(activity,
-                      new String[] { Manifest.permission.ACCESS_COARSE_LOCATION,Manifest.permission.ACCESS_FINE_LOCATION }, REQUEST_COARSE_LOCATION_PERMISSIONS);
-
-              pendingResult = result;
+            if (activity == null) {
+              result.error("no_permissions", "bluetooth permissions are not granted", null);
               break;
             }
+            pendingResult = result;
+            ActivityCompat.requestPermissions(activity, missing.toArray(new String[0]),
+                REQUEST_BLUETOOTH_PERMISSIONS);
+            break;
           }
           getBondedDevices(result);
 
@@ -488,7 +493,8 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
   @Override
   public boolean onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
 
-    if (requestCode == REQUEST_COARSE_LOCATION_PERMISSIONS) {
+    if (requestCode == REQUEST_BLUETOOTH_PERMISSIONS) {
+      if (pendingResult == null) return true;
       boolean allGranted = grantResults.length > 0;
       for (int grantResult : grantResults) {
         if (grantResult != PackageManager.PERMISSION_GRANTED) {
@@ -499,7 +505,7 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
       if (allGranted) {
         getBondedDevices(pendingResult);
       } else {
-        pendingResult.error("no_permissions", "this plugin requires location permissions for scanning", null);
+        pendingResult.error("no_permissions", "this plugin requires bluetooth permissions", null);
       }
       pendingResult = null;
       return true;
@@ -512,18 +518,22 @@ public class BlueThermalPrinterPlugin implements FlutterPlugin, ActivityAware, M
    * tanpa memicu dialog permintaan izin.
    */
   private boolean hasRequiredBluetoothPermissions() {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-      return ContextCompat.checkSelfPermission(activity, Manifest.permission.BLUETOOTH_SCAN)
-              == PackageManager.PERMISSION_GRANTED
-          && ContextCompat.checkSelfPermission(activity, Manifest.permission.BLUETOOTH_CONNECT)
-              == PackageManager.PERMISSION_GRANTED
-          && ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
-              == PackageManager.PERMISSION_GRANTED;
+    return missingPermissions(
+        BluetoothRequirementPolicy.connectPermissions(Build.VERSION.SDK_INT)).isEmpty();
+  }
+
+  /**
+   * Izin dari [permissions] yang belum diberikan. Memakai application context, jadi aman dipanggil
+   * tanpa Activity (dulu NPE saat {@code activity == null}).
+   */
+  private List<String> missingPermissions(List<String> permissions) {
+    List<String> missing = new ArrayList<>();
+    for (String permission : permissions) {
+      if (ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED) {
+        missing.add(permission);
+      }
     }
-    return ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION)
-            == PackageManager.PERMISSION_GRANTED
-        && ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
-            == PackageManager.PERMISSION_GRANTED;
+    return missing;
   }
 
   private void state(Result result) {

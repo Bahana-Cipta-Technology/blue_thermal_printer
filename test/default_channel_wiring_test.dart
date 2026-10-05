@@ -313,4 +313,68 @@ void main() {
       expect(await createPrinterBackend(PrinterVendor.usb).isAvailable(), isFalse);
     });
   });
+
+  group('Kontrol Bluetooth (blue_thermal_printer/bluetooth)', () {
+    const channel = MethodChannel('blue_thermal_printer/bluetooth');
+    late List<MethodCall> calls;
+
+    setUp(() {
+      calls = [];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return switch (call.method) {
+          'prerequisites' => {
+            'sdkInt': 33,
+            'items': [
+              {
+                'id': 'nearbyDevices',
+                'kind': 'permission',
+                'status': 'missing',
+                'resolution': 'requestPermission',
+                'permissions': ['android.permission.BLUETOOTH_SCAN'],
+                'operations': ['scan'],
+              },
+            ],
+          },
+          'powerState' => 'on',
+          'setEnabled' => 'alreadyInState',
+          'pair' => 'bonded',
+          _ => null,
+        };
+      });
+    });
+
+    tearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    test('nama method & argumen sama dengan BluetoothControlChannel.java',
+        () async {
+      final control = BluetoothControl();
+      final report = await control.checkPrerequisites();
+      expect(report.sdkInt, 33);
+      expect(report.nextStepFor(TransportOperation.scan)?.id, 'nearbyDevices');
+      expect(await control.powerState(), TransportPowerState.on);
+      expect((await control.setEnabled(false)).valueOrNull,
+          PowerToggleOutcome.alreadyInState);
+      expect(
+        (await control.pair(const PrinterDevice(name: 'P', macAddress: 'AA')))
+            .isOk,
+        isTrue,
+      );
+      await control.resolve(report.items.single);
+
+      expect(calls.map((c) => c.method), [
+        'prerequisites',
+        'powerState',
+        'setEnabled',
+        'pair',
+        'requestPermissions',
+        'prerequisites',
+      ]);
+      expect(calls[2].arguments, {'enabled': false});
+      expect(calls[3].arguments, {'address': 'AA'});
+      expect(calls[4].arguments, {
+        'permissions': ['android.permission.BLUETOOTH_SCAN'],
+      });
+    });
+  });
 }

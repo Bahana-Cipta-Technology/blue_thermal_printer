@@ -1,3 +1,10 @@
+## Unreleased — kontrol Bluetooth (nyala/mati, pencarian, pairing, prasyarat)
+Detail, tabel prasyarat per versi Android, dan checklist hardware: `doc/bluetooth-control-design.md`.
+* Baru: kemampuan opsional `TransportPowerControl`, `PrinterDeviceScanner`, `TransportPrerequisites`, diambil lewat `printerFeature<T>(backend)`. `PrinterBackend` tidak berubah. Backend Bluetooth (`createPrinterBackend(PrinterVendor.bluetooth)`) mendukung ketiganya lewat `BluetoothControl`; native di `transport/bluetooth/` (channel `blue_thermal_printer/bluetooth`).
+* ESC/POS Bluetooth: `connect()` menghentikan pencarian yang berjalan; pencarian ditolak selama struk dikirim.
+* **Manifest (ikut ter-merge ke semua app):** `ACCESS_COARSE_LOCATION` dan `BLUETOOTH_ADVERTISE` dihapus; `BLUETOOTH`/`BLUETOOTH_ADMIN`/`ACCESS_FINE_LOCATION` dibatasi `maxSdkVersion="30"`; `BLUETOOTH_SCAN` `neverForLocation`; tambah `uses-feature android.hardware.bluetooth required="false"`. App yang butuh lokasi untuk keperluan lain harus mendeklarasikannya sendiri.
+* API lama: `isPermissionBluetoothGranted` tidak lagi menuntut lokasi di Android 12+ dan tidak lagi NPE tanpa Activity; `getBondedDevices` tidak lagi meminta lokasi, dan panggilan kedua saat dialog izin terbuka ditolak `request_in_progress`.
+
 ## Unreleased — fondasi lintas vendor (F1 + F3)
 Detail, rancangan F2/F4 yang ditunda, dan checklist hardware: `doc/foundation-design.md`.
 * Baru: `BuiltInPrinterBackend` -- kerangka bersama printer bawaan; Sunmi/Xcheng/iMin kini subclass-nya (constructor publik tidak berubah). `PrintOutcome` netral vendor; `SunmiPrintOutcome`/`XchengPrintOutcome`/`IminPrintOutcome` jadi `typedef`.

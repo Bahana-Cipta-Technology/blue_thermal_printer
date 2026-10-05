@@ -59,6 +59,14 @@ abstract class EscposTransport {
   /// Buka setelan sistem yang relevan untuk transport ini (boleh no-op).
   Future<void> openSettings();
 
+  /// Kemampuan opsional [T] transport ini (lihat `printerFeature`), atau
+  /// `null`. Default: tidak ada.
+  T? feature<T extends Object>() => null;
+
+  /// Dipanggil sekali oleh `PrinterBackendEscpos`: [isPrinting] `true`
+  /// selama struk sedang dikirim. Default: diabaikan.
+  void bindPrintActivity(bool Function() isPrinting) {}
+
   /// Pesan saat [isEnabled] `false`.
   String get disabledMessage;
 

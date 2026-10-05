@@ -19,25 +19,26 @@
          perangkat tanpa USB host; ketersediaannya dicek saat runtime. -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
 
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-    <!-- Request legacy Bluetooth permissions on older devices. -->
-    <uses-permission android:name="android.permission.BLUETOOTH"
-        />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
+    <!-- Bluetooth Classic (SPP) untuk printer ESC/POS + kontrol adapter (transport/bluetooth/).
+         Rincian per operasi/versi Android: doc/bluetooth-control-design.md. Manifest ini ikut
+         ter-merge ke SEMUA app konsumen, jadi sengaja minimal. -->
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false"/>
 
-    <!-- Needed only if your app looks for Bluetooth devices.
-         You must add an attribute to this permission, or declare the
-         ACCESS_FINE_LOCATION permission, depending on the results when you
-         check location usage in your app. -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <!-- API <= 30: izin normal (otomatis saat instal) untuk koneksi, nyala/mati, pencarian, dan
+         pairing. API 31+ digantikan BLUETOOTH_SCAN/BLUETOOTH_CONNECT. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
 
-    <!-- Needed only if your app makes the device discoverable to Bluetooth
-         devices. -->
-    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <!-- API 23-30: pencarian perangkat Bluetooth wajib izin lokasi. FINE sudah mencakup lokasi
+         kasar, jadi ACCESS_COARSE_LOCATION tidak dideklarasikan. App yang butuh lokasi untuk
+         keperluan lain mendeklarasikan izinnya sendiri. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30"/>
 
-    <!-- Needed only if your app communicates with already-paired Bluetooth
-         devices. -->
+    <!-- API 31+: "Perangkat sekitar". Hasil pencarian tidak pernah dipakai untuk lokasi, jadi
+         tanpa izin lokasi. App yang menurunkan lokasi dari hasil scan harus menimpa flag ini
+         lewat tools:replace="android:usesPermissionFlags". -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"/>
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
 </manifest>

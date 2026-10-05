@@ -4,7 +4,9 @@ import 'dart:typed_data';
 import 'package:app_settings/app_settings.dart';
 
 import '../blue_thermal_printer.dart';
+import 'bluetooth_control.dart';
 import 'built_in_connection.dart';
+import 'device_scanner.dart';
 import 'escpos_transport.dart';
 import 'paper_width.dart';
 import 'printer_backend.dart';
@@ -43,10 +45,12 @@ class PrinterBackendEscpos implements PrinterBackend {
     Future<int?> Function()? queryTypeId,
     Future<int?> Function()? queryErrorStatus,
     Future<void> Function()? openSettings,
+    BluetoothControl? bluetoothControl,
     Duration printTimeout = const Duration(seconds: 30),
     Duration stuckAfter = const Duration(seconds: 30),
   }) : this.withTransport(
          _BluetoothEscposTransport(
+           control: bluetoothControl,
            isBluetoothOn: isBluetoothOn,
            isPermissionGranted: isPermissionGranted,
            discover: discover,
@@ -83,7 +87,11 @@ class PrinterBackendEscpos implements PrinterBackend {
       stuckAfter: stuckAfter,
       onStuck: disconnect,
     );
+    transport.bindPrintActivity(() => _gate.isBusy);
   }
+
+  /// Kemampuan opsional transport -- pakai `printerFeature`, bukan ini.
+  T? feature<T extends Object>() => _transport.feature<T>();
 
   final EscposTransport _transport;
   final ReceiptRenderer _renderer;
@@ -251,6 +259,10 @@ class PrinterBackendEscpos implements PrinterBackend {
     try {
       final precondition = await _checkPreconditions();
       if (precondition != null) return PrinterErr(precondition);
+      // Discovery yang masih berjalan memperlambat (bahkan menggagalkan)
+      // koneksi SPP.
+      final scanner = _transport.feature<PrinterDeviceScanner>();
+      if (scanner != null && scanner.isScanning) await scanner.stopScan();
       final failure = await _transport.connect(device);
       if (failure != null) return PrinterErr(failure);
       if (_connectedAddress != device.macAddress) _resetStatusSupport();
@@ -467,6 +479,7 @@ class PrinterBackendEscpos implements PrinterBackend {
 /// backend ESC/POS sebelum transport bisa diganti, tidak berubah.
 class _BluetoothEscposTransport extends EscposTransport {
   _BluetoothEscposTransport({
+    BluetoothControl? control,
     Future<bool> Function()? isBluetoothOn,
     Future<bool> Function()? isPermissionGranted,
     Future<List<PrinterDevice>> Function()? discover,
@@ -478,7 +491,8 @@ class _BluetoothEscposTransport extends EscposTransport {
     Future<int?> Function()? queryTypeId,
     Future<int?> Function()? queryErrorStatus,
     Future<void> Function()? openSettings,
-  }) : _isBluetoothOn =
+  }) : _control = control ?? BluetoothControl(),
+       _isBluetoothOn =
            isBluetoothOn ??
            (() async => await BlueThermalPrinter.instance.isOn ?? false),
        _isPermissionGranted =
@@ -547,6 +561,8 @@ class _BluetoothEscposTransport extends EscposTransport {
            openSettings ??
            (() => AppSettings.openAppSettings(type: AppSettingsType.bluetooth));
 
+  /// Nyala/mati, pencarian, pairing, prasyarat -- lewat `printerFeature`.
+  final BluetoothControl _control;
   final Future<bool> Function() _isBluetoothOn;
   final Future<bool> Function() _isPermissionGranted;
   final Future<List<PrinterDevice>> Function() _discover;
@@ -561,6 +577,13 @@ class _BluetoothEscposTransport extends EscposTransport {
 
   @override
   String get displayName => 'Bluetooth ESC/POS';
+
+  @override
+  T? feature<T extends Object>() => _control is T ? _control as T : null;
+
+  @override
+  void bindPrintActivity(bool Function() isPrinting) =>
+      _control.bindPrintActivity(isPrinting);
 
   @override
   Future<bool> isEnabled() => _isBluetoothOn();
