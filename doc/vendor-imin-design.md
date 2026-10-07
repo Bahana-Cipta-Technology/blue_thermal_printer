@@ -9,7 +9,7 @@ Tujuan: menambah printer bawaan iMin SDK 2.0 di belakang kontrak `PrinterBackend
 | Generasi | Perangkat | Jalur di plugin |
 |---|---|---|
 | **iMin SDK 2.0** | D4 Pro, Swift 1 Pro, Swift 2 / 2 Pro / 2 Ultra, Swan 2, Falcon 2 | **Backend baru `PrinterBackendImin`** (dokumen ini) |
-| iMin SDK 1.0 | D1, D1 Pro, D1w, D4, M2-202/203, M2 Pro, M2 Max, Swift 1, Falcon 1 | **Tanpa kode baru**: printer virtual Bluetooth "InnerPrinter" lewat `PrinterBackendEscpos` |
+| iMin SDK 1.0 | D1, D1 Pro, D1w, D4, M2-202/203, M2 Pro, M2 Max, Swift 1, Falcon 1 | Printer USB internal lewat `PrinterVendor.innerIminUsb` (`PrinterBackendIminUsb`, §4.6). Printer Bluetooth virtual **tidak** mencetak di D1 |
 
 Jenis kertas:
 - **80 mm** (576 px, dengan cutter): Falcon 1/2, D4 Pro, Swan 2. Printer ini juga bisa memakai kertas 58 mm.
@@ -132,6 +132,18 @@ Karena dokumen resmi kontradiktif (§2.1), aturannya sebagai berikut:
 - iMin dicek sebelum Sunmi sesuai prinsip "paling spesifik dulu", untuk berjaga-jaga bila servis iMin juga mengekspos AIDL Woyou (diverifikasi di hardware, §8).
 - Paket Xcheng dan iMin berbeda, jadi urutan di antara keduanya tidak berpengaruh.
 - Di perangkat tanpa servis iMin, `bind` langsung `false`, sehingga probe gagal cepat.
+
+### 4.6 iMin SDK 1.0: printer USB internal
+
+Diverifikasi di iMin D1 (Android 11, firmware `1.2.0.3.12_221109`), 7 Okt 2026:
+
+- Servis SDK 2.0 (`com.imin.printerservice`) tidak ada, jadi `innerImin` tidak bisa terhubung.
+- Printer bawaan adalah perangkat USB internal: `ALT althicoA726`, vendor `0x0519` / product `0x2013`, kelas USB Printer dua arah (bulk OUT + IN).
+- App resmi iMin (`com.imin.printer`, pustaka `IminPrintUtils` SDK 1.0) mencetak lewat USB langsung dari proses app biasa.
+- Printer Bluetooth virtual `00:11:22:33:44:55` dilayani `VirtualBluetoothService` di `com.android.systemui`. Layanan itu menerima data utuh, tetapi tiap tulis ke USB gagal (`UsbDriver: Length -1`), termasuk query status 3 byte. Jadi jalur ini tidak dipakai.
+- Ada servis perangkat `com.imin.printerPlugin` (AIDL `com.imin.printerPlugin.IminPrintService`: `printImage`, `send`, `getPrinterIOStatus`, `setUsbPrinterPower`, ...) tanpa SDK/dokumentasi publik. Tidak dipakai, karena jalur resmi SDK 1.0 sendiri adalah USB langsung.
+
+Implementasi: `PrinterBackendIminUsb` (`lib/src/printer_backend_imin_usb.dart`) membungkus `PrinterBackendEscpos` + `IminUsbEscposTransport` (transport USB yang hanya melihat ID di `kIminUsbPrinterIds`). Tanpa pairing, `ensureConnected` selalu ke printer internal, dan semua logika ESC/POS (pre/post-check `DLE EOT`, `PrintJobGate`, auto cut, lebar kertas) diwarisi. `detectBuiltInPrinterVendor` mengeceknya sesudah `innerImin` dan **tanpa connect/disconnect**: connect memunculkan dialog izin USB, dan channel USB native dipakai bersama. Izin USB diminta sekali per boot pada sambungan pertama.
 
 ## 5. Struktur kode
 
@@ -260,7 +272,8 @@ Di luar cakupan: preview struk di app memakai `ReceiptRenderer()` 384 px, jadi d
 - [ ] `getPrinterPaperType` di perangkat 58 dan 80 mm (termasuk printer 80 mm dengan kertas 58 mm): lebar pas, tidak terpotong.
 - [ ] Feed 70 cukup untuk tear bar. `partialCut` jalan di 80 mm dan tidak dipanggil di 58 mm.
 - [ ] Servis iMin mengekspos AIDL Woyou (`woyou.aidlservice.jiuiv5`) atau tidak (validasi §4.5).
-- [ ] Perangkat SDK 1.0 (mis. D1/M2): cetak lewat Bluetooth "InnerPrinter" dengan backend ESC/POS, termasuk dukungan `DLE EOT`.
+- [x] Perangkat SDK 1.0 (D1, 7 Okt 2026): Bluetooth virtual "BluetoothPrinter" **gagal** mencetak; printer USB internal lewat `innerIminUsb` mencetak, menjawab `DLE EOT`, dan terdeteksi otomatis. Detail: §4.6 dan `doc/hardware-test-2026-10.md`.
+- [ ] Perangkat SDK 1.0 lain (D1 Pro, D4, M2, ...): baca ID USB printer (`adb shell dumpsys usb`) dan tambahkan ke `kIminUsbPrinterIds` bila berbeda.
 - [ ] Regresi: Xcheng O1 tetap terdeteksi `innerXcheng` dan mencetak normal.
 
 ## 9. Fase implementasi

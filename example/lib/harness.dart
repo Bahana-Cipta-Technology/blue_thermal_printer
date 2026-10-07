@@ -70,6 +70,12 @@ class Ctx {
 
   PrinterBackend get bt => backend(PrinterVendor.bluetooth);
 
+  /// Printer USB internal iMin D1 (ALT althicoA726).
+  PrinterBackend get usb => backend(PrinterVendor.usb);
+
+  static const PrinterDevice internalUsb =
+      PrinterDevice(name: 'Printer USB internal', macAddress: 'usb:1305:8211');
+
   /// Printer LAN sungguhan: host dari kolom LAN (port default 9100).
   PrinterBackend get realLan => backend(PrinterVendor.lan);
 
@@ -717,6 +723,114 @@ final List<TestCase> allTests = <TestCase>[
   TestCase('lan', 'L8', 'Printer bisu (tanpa jawaban status) tetap mencetak', (c) async {
     return _lanPrint(c, 9104, expectOk: true, label: 'L8 bisu');
   }, timeout: const Duration(seconds: 90)),
+
+  // ===== Printer bawaan iMin D1 lewat USB internal =========================
+  TestCase('builtin', 'IB1', 'detectBuiltInPrinterVendor → innerIminUsb (tanpa dialog izin)', (c) async {
+    final Stopwatch w = Stopwatch()..start();
+    final PrinterVendor? vendor = await detectBuiltInPrinterVendor();
+    check(vendor == PrinterVendor.innerIminUsb, 'terdeteksi: ${vendor?.name}');
+    return '${w.elapsedMilliseconds} ms';
+  }),
+  TestCase('builtin', 'IB2', 'innerIminUsb: ensureConnected() tanpa lastDevice', (c) async {
+    final PrinterBackend b = c.backend(PrinterVendor.innerIminUsb);
+    check(!b.requiresPairing, 'requiresPairing seharusnya false');
+    final PrinterDevice d = unwrap(await b.ensureConnected(), 'ensureConnected');
+    final PrinterStatus s = unwrap(await b.checkStatus(), 'checkStatus');
+    return '${d.name}/${d.macAddress}; ${describe(s)}';
+  }, timeout: const Duration(seconds: 90)),
+  TestCase('builtin', 'IB3', 'innerIminUsb: printReceipt', (c) async {
+    final PrinterBackend b = c.backend(PrinterVendor.innerIminUsb);
+    unwrap(await b.ensureConnected(), 'ensureConnected');
+    final PrintDelivery d = unwrap(await b.printReceipt(fullReceipt('IB3 innerIminUsb')), 'printReceipt');
+    return 'delivery=${d.name} — periksa struk "IB3"';
+  }, prints: true, timeout: const Duration(seconds: 90)),
+  TestCase('builtin', 'IU1', 'USB: discoverDevices memuat printer internal', (c) async {
+    final List<PrinterDevice> devices = await c.usb.discoverDevices();
+    final String list = devices.map((d) => '${d.name}/${d.macAddress}').join(', ');
+    check(devices.any((d) => d.macAddress == Ctx.internalUsb.macAddress),
+        'printer internal tidak ada di daftar: $list');
+    return list;
+  }),
+  TestCase('builtin', 'IU2', 'USB: connect (izin USB) + isConnected', (c) async {
+    final Stopwatch w = Stopwatch()..start();
+    unwrap(await c.usb.connect(Ctx.internalUsb), 'connect');
+    check(await c.usb.isConnected(), 'isConnected() false setelah connect');
+    return 'tersambung ${w.elapsedMilliseconds} ms';
+  }, timeout: const Duration(seconds: 90)),
+  TestCase('builtin', 'IU3', 'USB: checkStatus dari printer internal', (c) async {
+    unwrap(await c.usb.ensureConnected(lastDevice: Ctx.internalUsb), 'ensureConnected');
+    final Stopwatch w = Stopwatch()..start();
+    final PrinterStatus s = unwrap(await c.usb.checkStatus(), 'checkStatus');
+    throw Info('${describe(s)} (${w.elapsedMilliseconds} ms)');
+  }),
+  TestCase('builtin', 'IU4', 'USB: capabilities sebelum cetak', (c) async {
+    unwrap(await c.usb.ensureConnected(lastDevice: Ctx.internalUsb), 'ensureConnected');
+    throw Info(describeCaps(await c.usb.capabilities()));
+  }),
+  TestCase('builtin', 'IU5', 'USB: printReceipt struk lengkap', (c) async {
+    unwrap(await c.usb.ensureConnected(lastDevice: Ctx.internalUsb), 'ensureConnected');
+    final Stopwatch w = Stopwatch()..start();
+    final PrintDelivery d = unwrap(await c.usb.printReceipt(fullReceipt('IU5 USB internal')), 'printReceipt');
+    return 'delivery=${d.name}, ${w.elapsedMilliseconds} ms; sesudah: ${describeCaps(await c.usb.capabilities())}';
+  }, prints: true, timeout: const Duration(seconds: 90)),
+  TestCase('builtin', 'IU6', 'USB: struk panjang 120 baris (> 16 KB)', (c) async {
+    unwrap(await c.usb.ensureConnected(lastDevice: Ctx.internalUsb), 'ensureConnected');
+    final Stopwatch w = Stopwatch()..start();
+    unwrap(await c.usb.printReceipt(longReceipt(120)), 'printReceipt');
+    return '${w.elapsedMilliseconds} ms — periksa 120 baris utuh';
+  }, prints: true, timeout: const Duration(seconds: 120)),
+  TestCase('builtin', 'IU7', 'USB: 3 QR (pendek, panjang, unicode)', (c) async {
+    unwrap(await c.usb.ensureConnected(lastDevice: Ctx.internalUsb), 'ensureConnected');
+    final String long = List<String>.generate(180, (i) => String.fromCharCode(97 + i % 26)).join();
+    unwrap(await c.usb.printReceipt(Receipt(lines: <ReceiptLine>[
+      const ReceiptCenter('IU7 QR', emphasized: true),
+      const ReceiptQr('A'),
+      ReceiptQr(long),
+      const ReceiptQr('Parkir ÅÉ 駐車場 ✓'),
+      const ReceiptCenter('3 QR: A / 180 huruf / unicode'),
+    ])), 'printReceipt');
+    return 'periksa 3 QR bisa dipindai';
+  }, prints: true, timeout: const Duration(seconds: 90)),
+  TestCase('builtin', 'IU8', 'USB: lebar kertas 58 / 80 / otomatis', (c) async {
+    unwrap(await c.usb.ensureConnected(lastDevice: Ctx.internalUsb), 'ensureConnected');
+    final List<String> rows = <String>[];
+    try {
+      for (final PaperWidthSetting setting in PaperWidthSetting.values) {
+        c.usb.setPaperWidth(setting);
+        final int px = (await c.usb.capabilities()).paperWidthPx;
+        unwrap(await c.usb.printReceipt(fullReceipt('IU8 ${setting.name} ${px}px')), 'print ${setting.name}');
+        rows.add('${setting.name}=${px}px');
+      }
+    } finally {
+      c.usb.setPaperWidth(PaperWidthSetting.auto);
+    }
+    return '${rows.join(', ')} — periksa lebar tiap struk';
+  }, prints: true, timeout: const Duration(seconds: 120)),
+  TestCase('builtin', 'IU9', 'USB: cetak bersamaan + disconnect lalu pulih', (c) async {
+    unwrap(await c.usb.ensureConnected(lastDevice: Ctx.internalUsb), 'ensureConnected');
+    final List<PrinterResult<PrintDelivery>> r = await Future.wait(<Future<PrinterResult<PrintDelivery>>>[
+      c.usb.printReceipt(fullReceipt('IU9 bersamaan')),
+      c.usb.printReceipt(fullReceipt('IU9 tidak boleh')),
+    ]);
+    final int ok = r.where((e) => e.isOk).length;
+    check(ok == 1, 'cetak bersamaan ok=$ok (seharusnya 1)');
+    await c.usb.disconnect();
+    check(!await c.usb.isConnected(), 'isConnected() masih true setelah disconnect');
+    final PrinterFailure f = expectErr(await c.usb.printReceipt(fullReceipt('tidak boleh')), 'cetak tanpa koneksi');
+    unwrap(await c.usb.ensureConnected(lastDevice: Ctx.internalUsb), 'ensureConnected pulih');
+    unwrap(await c.usb.printReceipt(fullReceipt('IU9 pulih')), 'cetak setelah pulih');
+    return 'saat putus: "${f.message}"; periksa 2 struk: "IU9 bersamaan" dan "IU9 pulih"';
+  }, prints: true, timeout: const Duration(seconds: 120)),
+  TestCase('builtin', 'VB1', 'Bluetooth virtual: struk mini (< 4 KB)', (c) async {
+    final PrinterDevice t = await c.requireTarget();
+    unwrap(await c.bt.ensureConnected(lastDevice: t), 'ensureConnected');
+    final Receipt mini = Receipt(lines: <ReceiptLine>[
+      const ReceiptCenter('VB1 VIRTUAL MINI', emphasized: true),
+    ]);
+    final List<int> png = await c.bt.preview(mini);
+    final PrintDelivery d = unwrap(await c.bt.printReceipt(mini), 'printReceipt');
+    return 'delivery=${d.name}, preview ${png.length} B — periksa apakah "VB1" keluar';
+  }, prints: true),
 
   // ===== Printer LAN sungguhan (butuh alamat di kolom LAN) ==================
   TestCase('reallan', 'RL1', 'connect() ke printer LAN + isConnected()', (c) async {

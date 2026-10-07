@@ -32,16 +32,36 @@ Sebelum perbaikan: F5 dan F6 gagal. Sesudahnya semua lulus dan tidak ada lagi ba
 | control (disruptif) | F9 | lulus: Bluetooth dimatikan di tengah scan berakhir `adapterOff` |
 | control (disruptif) | F10 | lulus: tersambung, Bluetooth mati lalu nyala, `ensureConnected` pulih |
 | core | C1–C13 | lulus |
-| print | P1–P7 | data terkirim tanpa galat (`unverified`). **Kondisi kertas fisik menunggu konfirmasi penguji** |
+| print | P1–P7 | data terkirim tanpa galat (`unverified`), tetapi **tidak ada struk keluar**: target P1–P7 adalah printer Bluetooth virtual D1 (lihat "Printer bawaan iMin D1") |
 | lan (server palsu) | L1–L8 | lulus. Port kertas habis, cover terbuka, dan galat hanya menerima query status 19 byte, tanpa data struk. Port normal menerima ESC @ + 4 pita `GS v 0`. Port bisu tetap mencetak tanpa `GS I` |
-| lan nyata (192.168.110.169:9100) | RL1–RL12 | lulus. Status terbaca (kertas ada, cover tertutup), auto-cut terdeteksi (`autoCut=true`), lebar otomatis 576 px. Struk fisik menunggu konfirmasi penguji |
+| lan nyata (192.168.110.169:9100) | RL1–RL12 | lulus. Status terbaca (kertas ada, cover tertutup), auto-cut terdeteksi (`autoCut=true`), lebar otomatis 576 px. Struk keluar (dikonfirmasi penguji) |
 | usb | U1 | lulus tanpa perangkat USB |
 | legacy | H1 | lulus |
 
+## Printer bawaan iMin D1
+
+Struk dari jalur Bluetooth virtual tidak pernah keluar, walau `printReceipt` melaporkan `unverified` tanpa galat.
+Penyebab dan jalur penggantinya ada di `doc/vendor-imin-design.md` §4.6. Ringkasnya:
+
+| Kasus | Hasil |
+|---|---|
+| Uji cetak app resmi iMin (`com.imin.printer`) | keluar (pembanding; memakai USB langsung) |
+| VB1 struk mini 2,4 KB lewat Bluetooth virtual | **tidak keluar**; log `VirtualBluetoothService` → `UsbDriver: Length -1` untuk setiap tulis, termasuk query status 3 byte |
+| IU1 USB `discoverDevices` | `althicoA726` `usb:1305:8211` (+ adapter LAN USB yang tidak dipakai) |
+| IU2 connect | dialog izin USB muncul, setelah OKE tersambung (±8 dtk termasuk dialog) |
+| IU3 `checkStatus` | dijawab: kertas ada, cover tertutup, tanpa galat (±130 ms) |
+| IU4 `capabilities` | 384 px, `autoCut=false`, `reportsPaperOut=true`; printer tidak menjawab `GS I 2` |
+| IU5–IU9 cetak (lengkap, 120 baris, 3 QR, lebar ×3, bersamaan + pulih) | **8 struk keluar sesuai harapan** (dikonfirmasi penguji); struk 120 baris ±11,8 dtk |
+| IB1 `detectBuiltInPrinterVendor()` | `innerIminUsb` dalam ±350 ms, tanpa dialog izin |
+| IB2 `innerIminUsb.ensureConnected()` tanpa `lastDevice` | tersambung, status terbaca |
+| IB3 `innerIminUsb.printReceipt` | terkirim |
+
+Izin USB yang sudah diberikan tetap berlaku setelah app di-force-stop; diminta lagi setelah reboot atau printer dilepas.
+
 ## Catatan perilaku
 
-- Printer SPP bawaan D1 (`BluetoothPrinter`, 00:11:22:33:44:55) tidak menjawab `DLE EOT`: `checkStatus()` mengembalikan
-  semua `null` (unknown), `reportsPaperOut=null`, `autoCut=false`, lebar otomatis 384 px. Kertas habis tidak bisa dideteksi di jalur ini.
+- Printer SPP virtual D1 (`BluetoothPrinter`, 00:11:22:33:44:55) tidak menjawab `DLE EOT` dan tidak mencetak sama sekali (lihat atas).
+  Kasus P1–P7 di tabel atas hanya membuktikan data terkirim ke layanan virtual, bukan struk keluar.
 - Sebelum cetakan pertama pada koneksi baru, `capabilities()` masih `paperWidthPx=384, autoCut=false`; sesudah cetakan pertama
   printer LAN 80 mm berubah menjadi 576 px dan `autoCut=true` (sesuai desain).
 - Waktu cetak (data terkirim): Bluetooth SPP 18–32 ms per struk pendek setelah tersambung, ±3 dtk pada cetakan pertama
@@ -50,6 +70,7 @@ Sebelum perbaikan: F5 dan F6 gagal. Sesudahnya semua lulus dan tidak ada lagi ba
 ## Belum teruji
 
 - Printer bawaan iMin SDK 2.0, Sunmi, dan Xcheng: perangkat uji tidak punya servisnya.
+- iMin SDK 1.0 selain D1 (ID USB printer bisa berbeda).
 - USB dengan printer sungguhan.
 - Pairing printer baru (butuh perangkat discoverable dengan PIN).
 - Android 13+ (dialog nyalakan Bluetooth, izin Perangkat sekitar).

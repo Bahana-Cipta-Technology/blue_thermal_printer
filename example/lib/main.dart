@@ -125,7 +125,8 @@ class _HarnessPageState extends State<HarnessPage> {
                                 !t.prints &&
                                 !t.disruptive &&
                                 t.group != 'lan' &&
-                                t.group != 'reallan'),
+                                t.group != 'reallan' &&
+                                t.group != 'builtin'),
                             label: 'aman',
                           ),
                   child: const Text('Aman'),
@@ -135,7 +136,10 @@ class _HarnessPageState extends State<HarnessPage> {
                   onPressed: _batchRunning
                       ? null
                       : () => _run(
-                            _where((t) => t.prints && t.group != 'reallan'),
+                            _where((t) =>
+                                t.prints &&
+                                t.group != 'reallan' &&
+                                t.group != 'builtin'),
                             label: 'cetak',
                           ),
                   child: const Text('Cetak fisik'),
@@ -163,6 +167,14 @@ class _HarnessPageState extends State<HarnessPage> {
                       : () => _run(_where((t) => t.group == 'reallan'),
                           label: 'reallan'),
                   child: const Text('LAN nyata'),
+                ),
+                FilledButton.tonal(
+                  key: const Key('run-builtin'),
+                  onPressed: _batchRunning
+                      ? null
+                      : () => _run(_where((t) => t.group == 'builtin'),
+                          label: 'builtin'),
+                  child: const Text('Bawaan iMin'),
                 ),
                 OutlinedButton(
                   key: const Key('clear'),
