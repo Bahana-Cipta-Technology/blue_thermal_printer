@@ -36,6 +36,14 @@ void main() {
     expect(backend.requiresPairing, isFalse);
   });
 
+  test('innerIminUsb membangun PrinterBackendIminUsb tanpa pairing', () {
+    final backend = createPrinterBackend(PrinterVendor.innerIminUsb);
+
+    expect(backend, isA<PrinterBackendIminUsb>());
+    expect(backend.requiresPairing, isFalse);
+    expect(backend.displayName, 'Printer Bawaan iMin (USB)');
+  });
+
   test('lan dan usb membangun PrinterBackendEscpos dengan transportnya', () {
     final lan = createPrinterBackend(PrinterVendor.lan);
     final usb = createPrinterBackend(PrinterVendor.usb);
@@ -62,6 +70,7 @@ void main() {
       expect(vendorsOf(PrinterTransport.builtIn), [
         PrinterVendor.innerXcheng,
         PrinterVendor.innerImin,
+        PrinterVendor.innerIminUsb,
         PrinterVendor.innerSunmi,
       ]);
       expect(vendorsOf(PrinterTransport.bluetooth), [PrinterVendor.bluetooth]);
@@ -121,8 +130,38 @@ void main() {
       expect(probed, [
         PrinterVendor.innerXcheng,
         PrinterVendor.innerImin,
+        PrinterVendor.innerIminUsb,
         PrinterVendor.innerSunmi,
       ]);
+    });
+
+    test('iMin SDK 1.0 (USB) dicek sesudah iMin SDK 2.0, sebelum Sunmi', () async {
+      final probed = <PrinterVendor>[];
+      final vendor = await detectBuiltInPrinterVendor(
+        probe: (v) {
+          probed.add(v);
+          return fake(v == PrinterVendor.innerIminUsb || v == PrinterVendor.innerSunmi);
+        },
+      );
+
+      expect(vendor, PrinterVendor.innerIminUsb);
+      expect(probed, [
+        PrinterVendor.innerXcheng,
+        PrinterVendor.innerImin,
+        PrinterVendor.innerIminUsb,
+      ]);
+    });
+
+    test('iMin USB dideteksi tanpa connect dan tanpa disconnect', () async {
+      final backends = <PrinterVendor, FakeBackend>{};
+      final vendor = await detectBuiltInPrinterVendor(
+        probe: (v) => backends[v] = fake(v == PrinterVendor.innerIminUsb),
+      );
+
+      expect(vendor, PrinterVendor.innerIminUsb);
+      final usb = backends[PrinterVendor.innerIminUsb]!;
+      expect(usb.connects, 0, reason: 'connect memicu dialog izin USB');
+      expect(usb.disconnects, 0, reason: 'channel USB dipakai bersama');
     });
 
     test('tanpa printer bawaan -> null (pakai Bluetooth)', () async {
@@ -157,7 +196,8 @@ void main() {
       );
 
       expect(vendor, PrinterVendor.innerSunmi);
-      expect(backends.every((b) => b.disconnects == 1), isTrue);
+      // iMin USB dideteksi tanpa connect, jadi tidak diputus (lihat test di atas).
+      expect(backends.where((b) => b.disconnects == 1).length, backends.length - 1);
     });
 
     test('probe default: perangkat tanpa servis (channel tidak ada) -> null',

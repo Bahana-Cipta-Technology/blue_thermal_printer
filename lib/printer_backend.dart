@@ -21,6 +21,7 @@ export 'src/printer_backend_escpos_network.dart';
 export 'src/printer_backend_escpos_usb.dart';
 export 'src/printer_backend_fallback.dart';
 export 'src/printer_backend_imin.dart';
+export 'src/printer_backend_imin_usb.dart';
 export 'src/printer_backend_sunmi.dart';
 export 'src/printer_backend_xcheng.dart';
 export 'src/printer_capabilities.dart';
