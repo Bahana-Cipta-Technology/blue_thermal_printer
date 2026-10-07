@@ -669,9 +669,15 @@ public class BluetoothControlChannel
       filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
       filter.addAction(BluetoothDevice.ACTION_FOUND);
       filter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
-      // Broadcast sistem tetap sampai ke receiver NOT_EXPORTED.
+      // EXPORTED, bukan NOT_EXPORTED: kelima aksi di atas adalah broadcast sistem terlindungi
+      // yang dikirim proses Bluetooth (uid 1002), bukan app ini. Di Android < 13
+      // ContextCompat.registerReceiver(..., NOT_EXPORTED) memasang izin kustom
+      // `<paket>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` pada receiver, sehingga sistem
+      // menolak broadcast tersebut ("Permission Denial: broadcasting Intent ...") dan scan,
+      // pairing, serta event nyala/mati tidak pernah sampai. Aksi terlindungi tidak bisa
+      // dipalsukan app lain, jadi EXPORTED aman.
       ContextCompat.registerReceiver(context, receiver, filter,
-          ContextCompat.RECEIVER_NOT_EXPORTED);
+          ContextCompat.RECEIVER_EXPORTED);
       receiverRegistered = true;
     } else if (!needed && receiverRegistered) {
       try {
