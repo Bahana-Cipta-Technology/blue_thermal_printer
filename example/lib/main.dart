@@ -1,246 +1,223 @@
-import 'package:blue_thermal_printer_example/testprint.dart';
 import 'package:flutter/material.dart';
-import 'dart:async';
-import 'package:blue_thermal_printer/blue_thermal_printer.dart';
-import 'package:flutter/services.dart';
 
-void main() => runApp(new MyApp());
+import 'harness.dart';
 
-class MyApp extends StatefulWidget {
-  @override
-  _MyAppState createState() => new _MyAppState();
-}
+void main() => runApp(const HarnessApp());
 
-class _MyAppState extends State<MyApp> {
-  BlueThermalPrinter bluetooth = BlueThermalPrinter.instance;
-
-  List<BluetoothDevice> _devices = [];
-  BluetoothDevice? _device;
-  bool _connected = false;
-  TestPrint testPrint = TestPrint();
-
-  @override
-  void initState() {
-    super.initState();
-    initPlatformState();
-  }
-
-  Future<void> initPlatformState() async {
-    // TODO here add a permission request using permission_handler
-    // if permission is not granted, kzaki's thermal print plugin will ask for location permission
-    // which will invariably crash the app even if user agrees so we'd better ask it upfront
-
-    // var statusLocation = Permission.location;
-    // if (await statusLocation.isGranted != true) {
-    //   await Permission.location.request();
-    // }
-    // if (await statusLocation.isGranted) {
-    // ...
-    // } else {
-    // showDialogSayingThatThisPermissionIsRequired());
-    // }
-    bool? isConnected = await bluetooth.isConnected;
-    List<BluetoothDevice> devices = [];
-    try {
-      devices = await bluetooth.getBondedDevices();
-    } on PlatformException {}
-
-    bluetooth.onStateChanged().listen((state) {
-      switch (state) {
-        case BlueThermalPrinter.CONNECTED:
-          setState(() {
-            _connected = true;
-            print("bluetooth device state: connected");
-          });
-          break;
-        case BlueThermalPrinter.DISCONNECTED:
-          setState(() {
-            _connected = false;
-            print("bluetooth device state: disconnected");
-          });
-          break;
-        case BlueThermalPrinter.DISCONNECT_REQUESTED:
-          setState(() {
-            _connected = false;
-            print("bluetooth device state: disconnect requested");
-          });
-          break;
-        case BlueThermalPrinter.STATE_TURNING_OFF:
-          setState(() {
-            _connected = false;
-            print("bluetooth device state: bluetooth turning off");
-          });
-          break;
-        case BlueThermalPrinter.STATE_OFF:
-          setState(() {
-            _connected = false;
-            print("bluetooth device state: bluetooth off");
-          });
-          break;
-        case BlueThermalPrinter.STATE_ON:
-          setState(() {
-            _connected = false;
-            print("bluetooth device state: bluetooth on");
-          });
-          break;
-        case BlueThermalPrinter.STATE_TURNING_ON:
-          setState(() {
-            _connected = false;
-            print("bluetooth device state: bluetooth turning on");
-          });
-          break;
-        case BlueThermalPrinter.ERROR:
-          setState(() {
-            _connected = false;
-            print("bluetooth device state: error");
-          });
-          break;
-        default:
-          print(state);
-          break;
-      }
-    });
-
-    if (!mounted) return;
-    setState(() {
-      _devices = devices;
-    });
-
-    if (isConnected == true) {
-      setState(() {
-        _connected = true;
-      });
-    }
-  }
+class HarnessApp extends StatelessWidget {
+  const HarnessApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      home: Scaffold(
-        appBar: AppBar(
-          title: Text('Blue Thermal Printer'),
+      title: 'Uji Plugin Printer',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFFF5A623),
+          brightness: Brightness.dark,
         ),
-        body: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: ListView(
-            children: <Widget>[
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                mainAxisAlignment: MainAxisAlignment.start,
-                children: <Widget>[
-                  const SizedBox(width: 10),
-                  const Text(
-                    'Device:',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(width: 30),
-                  Expanded(
-                    child: DropdownButton(
-                      items: _getDeviceItems(),
-                      onChanged: (BluetoothDevice? value) =>
-                          setState(() => _device = value),
-                      value: _device,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: <Widget>[
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(primary: Colors.brown),
-                    onPressed: () {
-                      initPlatformState();
-                    },
-                    child: const Text(
-                      'Refresh',
-                      style: TextStyle(color: Colors.white),
-                    ),
-                  ),
-                  const SizedBox(width: 20),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                        primary: _connected ? Colors.red : Colors.green),
-                    onPressed: _connected ? _disconnect : _connect,
-                    child: Text(
-                      _connected ? 'Disconnect' : 'Connect',
-                      style: TextStyle(color: Colors.white),
-                    ),
-                  ),
-                ],
-              ),
-              Padding(
-                padding:
-                    const EdgeInsets.only(left: 10.0, right: 10.0, top: 50),
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(primary: Colors.brown),
-                  onPressed: () {
-                    testPrint.sample();
-                  },
-                  child: const Text('PRINT TEST',
-                      style: TextStyle(color: Colors.white)),
-                ),
-              ),
-            ],
-          ),
-        ),
+        useMaterial3: true,
       ),
+      home: const HarnessPage(),
     );
   }
+}
 
-  List<DropdownMenuItem<BluetoothDevice>> _getDeviceItems() {
-    List<DropdownMenuItem<BluetoothDevice>> items = [];
-    if (_devices.isEmpty) {
-      items.add(DropdownMenuItem(
-        child: Text('NONE'),
-      ));
-    } else {
-      _devices.forEach((device) {
-        items.add(DropdownMenuItem(
-          child: Text(device.name ?? ""),
-          value: device,
-        ));
-      });
+class HarnessPage extends StatefulWidget {
+  const HarnessPage({super.key});
+
+  @override
+  State<HarnessPage> createState() => _HarnessPageState();
+}
+
+class _HarnessPageState extends State<HarnessPage> {
+  final Ctx _ctx = Ctx();
+  final Map<String, Outcome> _results = <String, Outcome>{};
+  final TextEditingController _btController = TextEditingController();
+  final TextEditingController _lanController = TextEditingController();
+  String? _running;
+  bool _batchRunning = false;
+
+  @override
+  void dispose() {
+    _btController.dispose();
+    _lanController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _run(List<TestCase> tests, {required String label}) async {
+    if (_batchRunning) return;
+    _ctx
+      ..btAddress = _btController.text.trim()
+      ..lanHost = _lanController.text.trim()
+      ..target = null;
+    setState(() => _batchRunning = true);
+    // ignore: avoid_print
+    print('HARNESS|BATCH|$label|START|0ms|${tests.length} kasus');
+    for (final TestCase test in tests) {
+      if (!mounted) return;
+      setState(() => _running = test.id);
+      final Outcome outcome = await runCase(test, _ctx);
+      if (!mounted) return;
+      setState(() => _results[test.id] = outcome);
     }
-    return items;
+    final Iterable<Outcome> done = tests
+        .map((t) => _results[t.id])
+        .whereType<Outcome>();
+    int count(Verdict v) => done.where((o) => o.verdict == v).length;
+    // ignore: avoid_print
+    print('HARNESS|BATCH|$label|SUMMARY|0ms|pass=${count(Verdict.pass)} '
+        'fail=${count(Verdict.fail)} skip=${count(Verdict.skip)} info=${count(Verdict.info)}');
+    setState(() {
+      _running = null;
+      _batchRunning = false;
+    });
   }
 
-  void _connect() {
-    if (_device != null) {
-      bluetooth.isConnected.then((isConnected) {
-        if (isConnected == false) {
-          bluetooth.connect(_device!).catchError((error) {
-            setState(() => _connected = false);
-          });
-          setState(() => _connected = true);
-        }
-      });
-    } else {
-      show('No device selected.');
-    }
-  }
+  List<TestCase> _where(bool Function(TestCase t) test) =>
+      allTests.where(test).toList();
 
-  void _disconnect() {
-    bluetooth.disconnect();
-    setState(() => _connected = false);
-  }
-
-  Future show(
-    String message, {
-    Duration duration: const Duration(seconds: 3),
-  }) async {
-    await new Future.delayed(new Duration(milliseconds: 100));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          message,
-          style: const TextStyle(color: Colors.white),
-        ),
-        duration: duration,
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Uji kontrak PrinterBackend')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _btController,
+                    decoration: const InputDecoration(
+                      labelText: 'MAC printer Bluetooth (kosong = otomatis)',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _lanController,
+                    decoration: const InputDecoration(
+                      labelText: 'Host PC untuk uji LAN',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton(
+                  key: const Key('run-safe'),
+                  onPressed: _batchRunning
+                      ? null
+                      : () => _run(
+                            _where((t) =>
+                                !t.prints &&
+                                !t.disruptive &&
+                                t.group != 'lan' &&
+                                t.group != 'reallan'),
+                            label: 'aman',
+                          ),
+                  child: const Text('Aman'),
+                ),
+                FilledButton.tonal(
+                  key: const Key('run-print'),
+                  onPressed: _batchRunning
+                      ? null
+                      : () => _run(
+                            _where((t) => t.prints && t.group != 'reallan'),
+                            label: 'cetak',
+                          ),
+                  child: const Text('Cetak fisik'),
+                ),
+                FilledButton.tonal(
+                  key: const Key('run-disruptive'),
+                  onPressed: _batchRunning
+                      ? null
+                      : () => _run(_where((t) => t.disruptive),
+                          label: 'disruptif'),
+                  child: const Text('Disruptif'),
+                ),
+                FilledButton.tonal(
+                  key: const Key('run-lan'),
+                  onPressed: _batchRunning
+                      ? null
+                      : () => _run(_where((t) => t.group == 'lan'),
+                          label: 'lan'),
+                  child: const Text('LAN'),
+                ),
+                FilledButton.tonal(
+                  key: const Key('run-reallan'),
+                  onPressed: _batchRunning
+                      ? null
+                      : () => _run(_where((t) => t.group == 'reallan'),
+                          label: 'reallan'),
+                  child: const Text('LAN nyata'),
+                ),
+                OutlinedButton(
+                  key: const Key('clear'),
+                  onPressed: _batchRunning
+                      ? null
+                      : () => setState(_results.clear),
+                  child: const Text('Bersihkan'),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: ListView.separated(
+              itemCount: allTests.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (BuildContext context, int index) {
+                final TestCase test = allTests[index];
+                final Outcome? outcome = _results[test.id];
+                final bool running = _running == test.id;
+                final (IconData icon, Color color) = switch (outcome?.verdict) {
+                  Verdict.pass => (Icons.check_circle, Colors.green),
+                  Verdict.fail => (Icons.cancel, Colors.redAccent),
+                  Verdict.skip => (Icons.remove_circle, Colors.grey),
+                  Verdict.info => (Icons.info, Colors.lightBlueAccent),
+                  null => (Icons.radio_button_unchecked, scheme.outline),
+                };
+                return ListTile(
+                  dense: true,
+                  leading: running
+                      ? const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(icon, color: color),
+                  title: Text('${test.id} · ${test.title}'),
+                  subtitle: Text(
+                    [
+                      '${test.group}${test.prints ? ' · cetak' : ''}'
+                          '${test.disruptive ? ' · disruptif' : ''}',
+                      if (outcome != null)
+                        '${outcome.elapsed.inMilliseconds} ms — ${outcome.note}',
+                    ].join('\n'),
+                    maxLines: 6,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  onTap: _batchRunning
+                      ? null
+                      : () => _run(<TestCase>[test], label: test.id),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
