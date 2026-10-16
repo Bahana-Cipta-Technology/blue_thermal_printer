@@ -1,3 +1,10 @@
+## Unreleased — vendor Ciontek (printer bawaan CS30)
+Detail, tabel kode, dan hasil uji hardware: `doc/vendor-ciontek-design.md`.
+* Baru: `PrinterVendor.innerCiontek` / `PrinterBackendCiontek` -- printer bawaan Ciontek lewat AIDL resmi `ICiontekPosService` (servis `posmanager`, SDK CS30Pro v1.0.2), native di `vendor/ciontek/` (channel `blue_thermal_printer/ciontek`). Pre-check `Lib_PrnCheckStatus`, hasil cetak dari `Lib_PrnStart` (`confirmed`).
+* `detectBuiltInPrinterVendor()` mengecek Ciontek sesudah iMin USB, sebelum Sunmi.
+* **App konsumen:** `switch` exhaustive atas `PrinterVendor` perlu case `innerCiontek`.
+* Test: suite kontrak + pemetaan status Ciontek, wiring channel, JUnit `CiontekResultCodes`; harness `example/` grup `ciontek`/`ciontekmanual`.
+
 ## Unreleased — kontrol Bluetooth (nyala/mati, pencarian, pairing, prasyarat)
 Detail, tabel prasyarat per versi Android, dan checklist hardware: `doc/bluetooth-control-design.md`.
 * Baru: kemampuan opsional `TransportPowerControl`, `PrinterDeviceScanner`, `TransportPrerequisites`, diambil lewat `printerFeature<T>(backend)`. `PrinterBackend` tidak berubah. Backend Bluetooth (`createPrinterBackend(PrinterVendor.bluetooth)`) mendukung ketiganya lewat `BluetoothControl`; native di `transport/bluetooth/` (channel `blue_thermal_printer/bluetooth`).

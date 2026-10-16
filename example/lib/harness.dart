@@ -832,6 +832,125 @@ final List<TestCase> allTests = <TestCase>[
     return 'delivery=${d.name}, preview ${png.length} B — periksa apakah "VB1" keluar';
   }, prints: true),
 
+  // ===== Printer bawaan Ciontek (AIDL resmi servis posmanager) ==============
+  TestCase('ciontek', 'CK1', 'detectBuiltInPrinterVendor → innerCiontek', (c) async {
+    final Stopwatch w = Stopwatch()..start();
+    final PrinterVendor? vendor = await detectBuiltInPrinterVendor();
+    check(vendor == PrinterVendor.innerCiontek, 'terdeteksi: ${vendor?.name}');
+    return '${w.elapsedMilliseconds} ms';
+  }),
+  TestCase('ciontek', 'CK2', 'connect + isConnected + ensureConnected tanpa lastDevice', (c) async {
+    final PrinterBackend b = c.backend(PrinterVendor.innerCiontek);
+    check(!b.requiresPairing, 'requiresPairing seharusnya false');
+    final Stopwatch w = Stopwatch()..start();
+    unwrap(await b.connect(kCiontekBuiltInDevice), 'connect');
+    final int connectMs = w.elapsedMilliseconds;
+    check(await b.isConnected(), 'isConnected() false setelah connect');
+    final PrinterDevice d = unwrap(await b.ensureConnected(), 'ensureConnected');
+    return '${d.name}/${d.macAddress}; connect $connectMs ms';
+  }),
+  TestCase('ciontek', 'CK3', 'checkStatus (Lib_PrnCheckStatus)', (c) async {
+    final PrinterBackend b = c.backend(PrinterVendor.innerCiontek);
+    unwrap(await b.ensureConnected(), 'ensureConnected');
+    final Stopwatch w = Stopwatch()..start();
+    final PrinterStatus s = unwrap(await b.checkStatus(), 'checkStatus');
+    throw Info('${describe(s)} (${w.elapsedMilliseconds} ms)');
+  }),
+  TestCase('ciontek', 'CK4', 'capabilities', (c) async {
+    final PrinterCapabilities caps = await c.backend(PrinterVendor.innerCiontek).capabilities();
+    check(caps.paperWidthPx == 384, 'lebar ${caps.paperWidthPx}');
+    return describeCaps(caps);
+  }),
+  TestCase('ciontek', 'CK5', 'preview(): PNG 384 px', (c) async {
+    final List<int> png = await c.backend(PrinterVendor.innerCiontek).preview(fullReceipt('CK5'));
+    check(png.length > 8 && png[1] == 0x50, 'bukan PNG');
+    final int width = (png[16] << 24) | (png[17] << 16) | (png[18] << 8) | png[19];
+    check(width == 384, 'lebar PNG $width');
+    return '${png.length} B';
+  }),
+  TestCase('ciontek', 'CK6', 'printReceipt: struk lengkap', (c) async {
+    final PrinterBackend b = c.backend(PrinterVendor.innerCiontek);
+    unwrap(await b.ensureConnected(), 'ensureConnected');
+    final Stopwatch w = Stopwatch()..start();
+    final PrintDelivery d = unwrap(await b.printReceipt(fullReceipt('CK6 Ciontek')), 'printReceipt');
+    return 'delivery=${d.name}, ${w.elapsedMilliseconds} ms — periksa struk "CK6"';
+  }, prints: true, timeout: const Duration(seconds: 90)),
+  TestCase('ciontek', 'CK7', 'Struk panjang 120 baris (multi-strip, buffer)', (c) async {
+    final PrinterBackend b = c.backend(PrinterVendor.innerCiontek);
+    unwrap(await b.ensureConnected(), 'ensureConnected');
+    final Stopwatch w = Stopwatch()..start();
+    final PrintDelivery d = unwrap(await b.printReceipt(longReceipt(120)), 'printReceipt');
+    return 'delivery=${d.name}, ${w.elapsedMilliseconds} ms — periksa 120 baris utuh tanpa celah';
+  }, prints: true, timeout: const Duration(seconds: 120)),
+  TestCase('ciontek', 'CK8', '3 QR (pendek, panjang, unicode)', (c) async {
+    final PrinterBackend b = c.backend(PrinterVendor.innerCiontek);
+    unwrap(await b.ensureConnected(), 'ensureConnected');
+    final String long = List<String>.generate(180, (i) => String.fromCharCode(97 + i % 26)).join();
+    unwrap(await b.printReceipt(Receipt(lines: <ReceiptLine>[
+      const ReceiptCenter('CK8 QR', emphasized: true),
+      const ReceiptQr('A'),
+      ReceiptQr(long),
+      const ReceiptQr('Parkir ÅÉ 駐車場 ✓'),
+      const ReceiptCenter('3 QR: A / 180 huruf / unicode'),
+    ])), 'printReceipt');
+    return 'periksa 3 QR bisa dipindai';
+  }, prints: true, timeout: const Duration(seconds: 90)),
+  TestCase('ciontek', 'CK9', 'Cetak bersamaan: satu OK, satu ditolak busy; status selama cetak', (c) async {
+    final PrinterBackend b = c.backend(PrinterVendor.innerCiontek);
+    unwrap(await b.ensureConnected(), 'ensureConnected');
+    final Future<List<PrinterResult<PrintDelivery>>> prints = Future.wait(<Future<PrinterResult<PrintDelivery>>>[
+      b.printReceipt(fullReceipt('CK9 bersamaan')),
+      b.printReceipt(fullReceipt('CK9 tidak boleh')),
+    ]);
+    // Query status di tengah cetak tidak boleh menyela modul printer (native menjawab unknown).
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    final Stopwatch w = Stopwatch()..start();
+    final PrinterStatus during = unwrap(await b.checkStatus(), 'checkStatus selama cetak');
+    final int duringMs = w.elapsedMilliseconds;
+    final List<PrinterResult<PrintDelivery>> r = await prints;
+    final int ok = r.where((e) => e.isOk).length;
+    final List<PrinterFailure> errs = <PrinterFailure>[
+      for (final PrinterResult<PrintDelivery> e in r)
+        if (e.failureOrNull != null) e.failureOrNull!,
+    ];
+    check(ok == 1 && errs.length == 1, 'ok=$ok err=${errs.length}');
+    check(errs.single.message == PrintJobGate.busyMessage, 'pesan: ${errs.single.message}');
+    return 'status selama cetak: ${describe(during)} ($duringMs ms); periksa hanya "CK9 bersamaan"';
+  }, prints: true, timeout: const Duration(seconds: 90)),
+  TestCase('ciontek', 'CK10', 'disconnect → cetak Err → ensureConnected pulih → cetak OK', (c) async {
+    final PrinterBackend b = c.backend(PrinterVendor.innerCiontek);
+    unwrap(await b.ensureConnected(), 'ensureConnected');
+    await b.disconnect();
+    check(!await b.isConnected(), 'isConnected() masih true setelah disconnect');
+    final PrinterFailure f = expectErr(await b.printReceipt(fullReceipt('tidak boleh')), 'cetak tanpa koneksi');
+    unwrap(await b.ensureConnected(), 'ensureConnected pulih');
+    final PrintDelivery d = unwrap(await b.printReceipt(fullReceipt('CK10 pulih')), 'cetak setelah pulih');
+    return 'saat putus: "${f.message}"; delivery=${d.name}; periksa hanya "CK10 pulih"';
+  }, prints: true, timeout: const Duration(seconds: 90)),
+
+  // Manual: penguji melepas gulungan kertas sebelum (CK11) / di tengah (CK12) cetak.
+  TestCase('ciontekmanual', 'CK11', 'Kertas dilepas: checkStatus + cetak ditolak tanpa data', (c) async {
+    final PrinterBackend b = c.backend(PrinterVendor.innerCiontek);
+    unwrap(await b.ensureConnected(), 'ensureConnected');
+    final PrinterStatus s = unwrap(await b.checkStatus(), 'checkStatus');
+    final Stopwatch w = Stopwatch()..start();
+    final PrinterResult<PrintDelivery> r = await b.printReceipt(fullReceipt('CK11 tidak boleh tercetak'));
+    final int ms = w.elapsedMilliseconds;
+    check(s.hasPaper == false, 'status kertas: ${describe(s)}');
+    final PrinterFailure f = expectErr(r, 'cetak tanpa kertas');
+    return '${describe(s)}; "${f.message}" ($ms ms) — pasang kertas: TIDAK boleh ada struk menyusul';
+  }, prints: true, timeout: const Duration(seconds: 90)),
+  TestCase('ciontekmanual', 'CK12', 'Kertas dicabut di tengah cetak struk panjang', (c) async {
+    final PrinterBackend b = c.backend(PrinterVendor.innerCiontek);
+    unwrap(await b.ensureConnected(), 'ensureConnected');
+    final Stopwatch w = Stopwatch()..start();
+    final PrinterResult<PrintDelivery> r = await b.printReceipt(longReceipt(200));
+    final int ms = w.elapsedMilliseconds;
+    final PrinterStatus s = unwrap(await b.checkStatus(), 'checkStatus');
+    final PrinterFailure f = expectErr(r, 'cetak saat kertas dicabut');
+    return '"${f.message}" ($ms ms); sesudah: ${describe(s)}';
+  }, prints: true, timeout: const Duration(seconds: 120)),
+
   // ===== Printer LAN sungguhan (butuh alamat di kolom LAN) ==================
   TestCase('reallan', 'RL1', 'connect() ke printer LAN + isConnected()', (c) async {
     final PrinterDevice d = c.realLanDevice;

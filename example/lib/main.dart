@@ -74,6 +74,14 @@ class _HarnessPageState extends State<HarnessPage> {
     });
   }
 
+  /// Grup yang hanya bermakna di perangkat tertentu (iMin D1, Ciontek), jadi
+  /// tidak ikut tombol umum. `ciontekmanual` hanya dijalankan per kasus.
+  static const Set<String> _deviceSpecific = <String>{
+    'builtin',
+    'ciontek',
+    'ciontekmanual',
+  };
+
   List<TestCase> _where(bool Function(TestCase t) test) =>
       allTests.where(test).toList();
 
@@ -126,7 +134,7 @@ class _HarnessPageState extends State<HarnessPage> {
                                 !t.disruptive &&
                                 t.group != 'lan' &&
                                 t.group != 'reallan' &&
-                                t.group != 'builtin'),
+                                !_deviceSpecific.contains(t.group)),
                             label: 'aman',
                           ),
                   child: const Text('Aman'),
@@ -139,7 +147,7 @@ class _HarnessPageState extends State<HarnessPage> {
                             _where((t) =>
                                 t.prints &&
                                 t.group != 'reallan' &&
-                                t.group != 'builtin'),
+                                !_deviceSpecific.contains(t.group)),
                             label: 'cetak',
                           ),
                   child: const Text('Cetak fisik'),
@@ -175,6 +183,14 @@ class _HarnessPageState extends State<HarnessPage> {
                       : () => _run(_where((t) => t.group == 'builtin'),
                           label: 'builtin'),
                   child: const Text('Bawaan iMin'),
+                ),
+                FilledButton.tonal(
+                  key: const Key('run-ciontek'),
+                  onPressed: _batchRunning
+                      ? null
+                      : () => _run(_where((t) => t.group == 'ciontek'),
+                          label: 'ciontek'),
+                  child: const Text('Bawaan Ciontek'),
                 ),
                 OutlinedButton(
                   key: const Key('clear'),
