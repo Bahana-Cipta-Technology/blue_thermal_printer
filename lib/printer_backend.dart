@@ -14,6 +14,7 @@ export 'src/built_in_printer_backend.dart';
 export 'src/paper_width.dart';
 export 'src/print_job_gate.dart';
 export 'src/printer_backend.dart';
+export 'src/printer_backend_ciontek.dart';
 export 'src/device_scanner.dart';
 export 'src/escpos_transport.dart';
 export 'src/printer_backend_escpos.dart';

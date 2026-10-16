@@ -44,6 +44,15 @@ void main() {
     expect(backend.displayName, 'Printer Bawaan iMin (USB)');
   });
 
+  test('innerCiontek membangun PrinterBackendCiontek tanpa pairing', () {
+    final backend = createPrinterBackend(PrinterVendor.innerCiontek);
+
+    expect(backend, isA<PrinterBackendCiontek>());
+    expect(backend.requiresPairing, isFalse);
+    expect(backend.displayName, 'Printer Bawaan Ciontek');
+    expect(PrinterVendor.innerCiontek.transport, PrinterTransport.builtIn);
+  });
+
   test('lan dan usb membangun PrinterBackendEscpos dengan transportnya', () {
     final lan = createPrinterBackend(PrinterVendor.lan);
     final usb = createPrinterBackend(PrinterVendor.usb);
@@ -71,6 +80,7 @@ void main() {
         PrinterVendor.innerXcheng,
         PrinterVendor.innerImin,
         PrinterVendor.innerIminUsb,
+        PrinterVendor.innerCiontek,
         PrinterVendor.innerSunmi,
       ]);
       expect(vendorsOf(PrinterTransport.bluetooth), [PrinterVendor.bluetooth]);
@@ -117,7 +127,25 @@ void main() {
       expect(probed, [PrinterVendor.innerXcheng, PrinterVendor.innerImin]);
     });
 
-    test('bukan Xcheng/iMin -> Sunmi', () async {
+    test('bukan Xcheng/iMin/iMin USB -> Ciontek dicek sebelum Sunmi', () async {
+      final probed = <PrinterVendor>[];
+      final vendor = await detectBuiltInPrinterVendor(
+        probe: (v) {
+          probed.add(v);
+          return fake(v == PrinterVendor.innerCiontek || v == PrinterVendor.innerSunmi);
+        },
+      );
+
+      expect(vendor, PrinterVendor.innerCiontek);
+      expect(probed, [
+        PrinterVendor.innerXcheng,
+        PrinterVendor.innerImin,
+        PrinterVendor.innerIminUsb,
+        PrinterVendor.innerCiontek,
+      ]);
+    });
+
+    test('bukan Xcheng/iMin/Ciontek -> Sunmi', () async {
       final probed = <PrinterVendor>[];
       final vendor = await detectBuiltInPrinterVendor(
         probe: (v) {
@@ -131,6 +159,7 @@ void main() {
         PrinterVendor.innerXcheng,
         PrinterVendor.innerImin,
         PrinterVendor.innerIminUsb,
+        PrinterVendor.innerCiontek,
         PrinterVendor.innerSunmi,
       ]);
     });

@@ -1,4 +1,5 @@
 import 'printer_backend.dart';
+import 'printer_backend_ciontek.dart';
 import 'printer_backend_escpos.dart';
 import 'printer_backend_escpos_network.dart';
 import 'printer_backend_escpos_usb.dart';
@@ -29,6 +30,10 @@ enum PrinterVendor {
   /// Printer USB internal perangkat iMin SDK 1.0 (mis. D1), lihat
   /// [PrinterBackendIminUsb].
   innerIminUsb,
+
+  /// Printer bawaan perangkat Ciontek (mis. CS30) lewat AIDL resmi servis
+  /// `posmanager`, lihat [PrinterBackendCiontek].
+  innerCiontek,
 }
 
 /// Jalur fisik ke printer -- tingkat pertama yang dilihat pengguna saat
@@ -43,7 +48,8 @@ extension PrinterVendorTransport on PrinterVendor {
     PrinterVendor.innerSunmi ||
     PrinterVendor.innerXcheng ||
     PrinterVendor.innerImin ||
-    PrinterVendor.innerIminUsb => PrinterTransport.builtIn,
+    PrinterVendor.innerIminUsb ||
+    PrinterVendor.innerCiontek => PrinterTransport.builtIn,
     PrinterVendor.bluetooth => PrinterTransport.bluetooth,
     PrinterVendor.lan => PrinterTransport.lan,
     PrinterVendor.usb => PrinterTransport.usb,
@@ -67,8 +73,9 @@ List<PrinterVendor> vendorsOf(PrinterTransport transport) => switch (transport) 
 /// disediakan servis Xcheng bila antarmuka native itu tidak bisa terhubung
 /// (lihat [PrinterBackendFallback]). [PrinterVendor.innerImin] untuk printer
 /// bawaan iMin SDK 2.0 ([PrinterBackendImin]), [PrinterVendor.innerIminUsb]
-/// untuk printer USB internal iMin SDK 1.0 ([PrinterBackendIminUsb]).
-/// [PrinterVendor.lan] dan
+/// untuk printer USB internal iMin SDK 1.0 ([PrinterBackendIminUsb]),
+/// [PrinterVendor.innerCiontek] untuk printer bawaan Ciontek
+/// ([PrinterBackendCiontek]). [PrinterVendor.lan] dan
 /// [PrinterVendor.usb] memakai logika ESC/POS yang sama dengan Bluetooth di
 /// atas [NetworkEscposTransport]/[UsbEscposTransport].
 PrinterBackend createPrinterBackend(PrinterVendor vendor) => switch (vendor) {
@@ -82,6 +89,7 @@ PrinterBackend createPrinterBackend(PrinterVendor vendor) => switch (vendor) {
   PrinterVendor.lan => PrinterBackendEscpos.withTransport(NetworkEscposTransport()),
   PrinterVendor.usb => PrinterBackendEscpos.withTransport(UsbEscposTransport()),
   PrinterVendor.innerIminUsb => PrinterBackendIminUsb(),
+  PrinterVendor.innerCiontek => PrinterBackendCiontek(),
 };
 
 /// Urutan pengecekan printer bawaan: yang paling spesifik dulu. Servis
@@ -90,11 +98,15 @@ PrinterBackend createPrinterBackend(PrinterVendor vendor) => switch (vendor) {
 /// kehilangan sensor kertasnya). iMin juga dicek sebelum Sunmi dengan alasan
 /// yang sama, berjaga-jaga bila servisnya ikut mengekspos AIDL Woyou. iMin
 /// SDK 1.0 (printer USB internal) dicek sesudah iMin SDK 2.0: perangkat SDK 2.0
-/// memakai servisnya, perangkat SDK 1.0 tidak punya servis itu.
+/// memakai servisnya, perangkat SDK 1.0 tidak punya servis itu. Ciontek
+/// (servis sistem `posmanager`, dikenali dari descriptor AIDL-nya) tidak
+/// mengekspos AIDL Woyou, tapi tetap dicek sebelum Sunmi supaya Sunmi selalu
+/// jadi pilihan terakhir; probe-nya murah dan tanpa dialog.
 const _builtInDetectionOrder = [
   PrinterVendor.innerXcheng,
   PrinterVendor.innerImin,
   PrinterVendor.innerIminUsb,
+  PrinterVendor.innerCiontek,
   PrinterVendor.innerSunmi,
 ];
 
@@ -105,7 +117,7 @@ const _builtInDetectionOrder = [
 const _detectedWithoutConnect = {PrinterVendor.innerIminUsb};
 
 /// Deteksi printer bawaan perangkat ini: vendor pertama (Xcheng, iMin, iMin
-/// USB, lalu Sunmi) yang berhasil terhubung, atau `null` bila tidak ada printer bawaan
+/// USB, Ciontek, lalu Sunmi) yang berhasil terhubung, atau `null` bila tidak ada printer bawaan
 /// (pakai Bluetooth). Cukup dipanggil sekali (mis. saat boot) -- hardware tidak
 /// berubah selama app hidup. Tiap probe diputus lagi setelah dicek.
 ///

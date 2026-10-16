@@ -160,6 +160,72 @@ void main() {
     });
   });
 
+  group('Ciontek (blue_thermal_printer/ciontek)', () {
+    const channel = MethodChannel('blue_thermal_printer/ciontek');
+
+    tearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    test('isReady + status + printBitmap memakai nama method/argumen native', () async {
+      final calls = <MethodCall>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return switch (call.method) {
+          'isReady' => true,
+          'status' => 0,
+          'printBitmap' => 'printed',
+          _ => null,
+        };
+      });
+
+      final result = await PrinterBackendCiontek().printReceipt(
+        const Receipt(lines: [ReceiptCenter('TES')]),
+      );
+
+      expect(result.valueOrNull, PrintDelivery.confirmed);
+      final print = calls.singleWhere((c) => c.method == 'printBitmap');
+      final args = print.arguments as Map;
+      expect((args['bytes'] as Uint8List).sublist(0, 4), [137, 80, 78, 71]);
+      expect(args['feedPixels'], PrinterBackendCiontek.feedPixels);
+    });
+
+    test('bind + unbind memakai nama method native', () async {
+      final calls = <String>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call.method);
+        return call.method == 'unbind' ? null : true;
+      });
+
+      final backend = PrinterBackendCiontek(connectPollInterval: Duration.zero);
+      expect((await backend.connect(kCiontekBuiltInDevice)).isOk, isTrue);
+      await backend.disconnect();
+
+      expect(calls, ['bind', 'isReady', 'unbind']);
+    });
+
+    test('status -1 dari native memblokir tanpa printBitmap', () async {
+      final calls = <String>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call.method);
+        return switch (call.method) {
+          'isReady' => true,
+          'status' => -1,
+          _ => 'printed',
+        };
+      });
+
+      final result = await PrinterBackendCiontek().printReceipt(
+        const Receipt(lines: []),
+      );
+
+      expect(result.failureOrNull?.message, 'Kertas printer habis.');
+      expect(calls, isNot(contains('printBitmap')));
+    });
+
+    test('perangkat non-Ciontek (channel tanpa handler) tidak tersedia', () async {
+      expect(await PrinterBackendCiontek().isAvailable(), isFalse);
+    });
+  });
+
   group('iMin (blue_thermal_printer/imin)', () {
     const channel = MethodChannel('blue_thermal_printer/imin');
 
