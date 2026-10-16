@@ -1,18 +1,22 @@
-## Unreleased — vendor Ciontek (printer bawaan CS30)
+## 2.0.0 — 16 Okt 2026 (fork Bahana-Cipta-Technology)
+Rilis bertag pertama fork ini. Kontrak multi-vendor `PrinterBackend` (`package:blue_thermal_printer/printer_backend.dart`) dengan printer bawaan Sunmi, Xcheng, iMin SDK 2.0, iMin SDK 1.0 USB, dan Ciontek, plus ESC/POS lewat Bluetooth, LAN, dan USB. API lama `BlueThermalPrinter` tetap tersedia.
+* **Breaking:** `PrinterVendor` bertambah nilai (terakhir `innerCiontek`). App konsumen dengan `switch` exhaustive atas enum ini wajib menambah case baru.
+
+### Vendor Ciontek (printer bawaan CS30)
 Detail, tabel kode, dan hasil uji hardware: `doc/vendor-ciontek-design.md`.
 * Baru: `PrinterVendor.innerCiontek` / `PrinterBackendCiontek` -- printer bawaan Ciontek lewat AIDL resmi `ICiontekPosService` (servis `posmanager`, SDK CS30Pro v1.0.2), native di `vendor/ciontek/` (channel `blue_thermal_printer/ciontek`). Pre-check `Lib_PrnCheckStatus`, hasil cetak dari `Lib_PrnStart` (`confirmed`).
 * `detectBuiltInPrinterVendor()` mengecek Ciontek sesudah iMin USB, sebelum Sunmi.
 * **App konsumen:** `switch` exhaustive atas `PrinterVendor` perlu case `innerCiontek`.
 * Test: suite kontrak + pemetaan status Ciontek, wiring channel, JUnit `CiontekResultCodes`; harness `example/` grup `ciontek`/`ciontekmanual`.
 
-## Unreleased — kontrol Bluetooth (nyala/mati, pencarian, pairing, prasyarat)
+### Kontrol Bluetooth (nyala/mati, pencarian, pairing, prasyarat)
 Detail, tabel prasyarat per versi Android, dan checklist hardware: `doc/bluetooth-control-design.md`.
 * Baru: kemampuan opsional `TransportPowerControl`, `PrinterDeviceScanner`, `TransportPrerequisites`, diambil lewat `printerFeature<T>(backend)`. `PrinterBackend` tidak berubah. Backend Bluetooth (`createPrinterBackend(PrinterVendor.bluetooth)`) mendukung ketiganya lewat `BluetoothControl`; native di `transport/bluetooth/` (channel `blue_thermal_printer/bluetooth`).
 * ESC/POS Bluetooth: `connect()` menghentikan pencarian yang berjalan; pencarian ditolak selama struk dikirim.
 * **Manifest (ikut ter-merge ke semua app):** `ACCESS_COARSE_LOCATION` dan `BLUETOOTH_ADVERTISE` dihapus; `BLUETOOTH`/`BLUETOOTH_ADMIN`/`ACCESS_FINE_LOCATION` dibatasi `maxSdkVersion="30"`; `BLUETOOTH_SCAN` `neverForLocation`; tambah `uses-feature android.hardware.bluetooth required="false"`. App yang butuh lokasi untuk keperluan lain harus mendeklarasikannya sendiri.
 * API lama: `isPermissionBluetoothGranted` tidak lagi menuntut lokasi di Android 12+ dan tidak lagi NPE tanpa Activity; `getBondedDevices` tidak lagi meminta lokasi, dan panggilan kedua saat dialog izin terbuka ditolak `request_in_progress`.
 
-## Unreleased — fondasi lintas vendor (F1 + F3)
+### Fondasi lintas vendor (F1 + F3)
 Detail, rancangan F2/F4 yang ditunda, dan checklist hardware: `doc/foundation-design.md`.
 * Baru: `BuiltInPrinterBackend` -- kerangka bersama printer bawaan; Sunmi/Xcheng/iMin kini subclass-nya (constructor publik tidak berubah). `PrintOutcome` netral vendor; `SunmiPrintOutcome`/`XchengPrintOutcome`/`IminPrintOutcome` jadi `typedef`.
 * Sunmi: outcome `unknown` + query status yang gagal setelah data terkirim kini `Ok(unverified)` (sebelumnya `Err`), sama dengan Xcheng/iMin.
@@ -20,7 +24,7 @@ Detail, rancangan F2/F4 yang ditunda, dan checklist hardware: `doc/foundation-de
 * Baru: `PrinterVendor.lan` (`NetworkEscposTransport`, TCP 9100, `parseNetworkAddress`) dan `PrinterVendor.usb` (`UsbEscposTransport`, bulk transfer + izin USB), native di `transport/net/` dan `transport/usb/`.
 * Manifest: `INTERNET` dan `uses-feature android.hardware.usb.host` (`required="false"`).
 
-## Unreleased (fork Bahana-Cipta-Technology) — audit September 2026
+### Audit September 2026
 Detail + checklist verifikasi hardware: `doc/audit-2026-09.md`.
 * Sunmi: kode `updatePrinterState()` dipetakan sesuai tabel AIDL resmi (kertas habis = 4, bukan 3) lewat `sunmiStateToStatus()`.
 * Sunmi: cetak memakai transaksi buffer + `exitPrinterBufferWithCallback`; hasil `printed`/`failed`/`unknown` dari `onPrintResult` (channel `printBitmap`/`enterBuffer`/`exitBuffer` diganti `printTransaction`). Struk di-feed 3 baris setelah bitmap.
