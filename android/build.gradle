@@ -33,8 +33,10 @@ android {
     namespace 'id.kakzaki.blue_thermal_printer'
     compileSdkVersion 36
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        // Java 17 = baseline AGP 9 / Flutter 3.50; Java 8 memicu peringatan
+        // "source/target value 8 is obsolete" di build app konsumen.
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
     defaultConfig {
         // 21 = minSdk IminPrinterLibrary (dan batas bawah Flutter sendiri).

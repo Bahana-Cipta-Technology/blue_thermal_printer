@@ -1,3 +1,6 @@
+## Unreleased
+* Android: target Java 1.8 → 17 (baseline AGP 9 / Flutter 3.50), menghapus peringatan "source/target value 8 is obsolete" di build app konsumen. Tidak ada perubahan API.
+
 ## 2.0.0 — 16 Okt 2026 (fork Bahana-Cipta-Technology)
 Rilis bertag pertama fork ini. Kontrak multi-vendor `PrinterBackend` (`package:blue_thermal_printer/printer_backend.dart`) dengan printer bawaan Sunmi, Xcheng, iMin SDK 2.0, iMin SDK 1.0 USB, dan Ciontek, plus ESC/POS lewat Bluetooth, LAN, dan USB. API lama `BlueThermalPrinter` tetap tersedia.
 * **Breaking:** `PrinterVendor` bertambah nilai (terakhir `innerCiontek`). App konsumen dengan `switch` exhaustive atas enum ini wajib menambah case baru.
